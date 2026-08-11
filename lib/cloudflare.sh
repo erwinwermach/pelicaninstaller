@@ -181,42 +181,6 @@ cf_ensure_dns() {
   done
 }
 
-cf_ensure_routes() {
-  [ -n "$CF_TUNNEL_ID" ] || cf_ensure_tunnel || return 1
-  local port host service_type result
-
-  for port in $(expand_ports "${GAME_PORTS:-25565-25575}"); do
-    host=$(game_fqdn "$port")
-    for service_type in tcp udp; do
-      if cf_api GET "/accounts/$CF_ACCOUNT_ID/cfd_tunnel/$CF_TUNNEL_ID/routes" 2>/dev/null; then
-        result=$(echo "$CF_RESP" | jq -r --arg h "$host" --arg t "$service_type" '.result[] | select(.hostname == $h and .type == $t) | .id // empty' 2>/dev/null)
-      else
-        result=""
-      fi
-      if [ -n "$result" ]; then
-        continue
-      fi
-      log "Creating $service_type tunnel route for $host..."
-      cf_api POST "/accounts/$CF_ACCOUNT_ID/cfd_tunnel/$CF_TUNNEL_ID/routes" \
-        "{\"hostname\":\"$host\",\"type\":\"$service_type\",\"service\":\"$service_type://127.0.0.1:$port\"}"
-      if ! cf_success; then
-        log_err "Route creation failed for $host ($service_type): $CF_RESP"
-      fi
-    done
-  done
-
-  host="$NODE_FQDN"
-  cf_api GET "/accounts/$CF_ACCOUNT_ID/cfd_tunnel/$CF_TUNNEL_ID/routes" 2>/dev/null
-  if ! echo "$CF_RESP" | jq -e --arg h "$host:2022" '.result[] | select(.hostname == $h and .type == "tcp")' >/dev/null 2>&1; then
-    log "Creating TCP tunnel route for SFTP ($host:2022)..."
-    cf_api POST "/accounts/$CF_ACCOUNT_ID/cfd_tunnel/$CF_TUNNEL_ID/routes" \
-      "{\"hostname\":\"$host:2022\",\"type\":\"tcp\",\"service\":\"tcp://127.0.0.1:2022\"}"
-    if ! cf_success; then
-      log_err "SFTP route creation failed: $CF_RESP"
-    fi
-  fi
-}
-
 cf_config_content() {
   {
     echo "tunnel: $CF_TUNNEL_ID"
@@ -227,6 +191,8 @@ cf_config_content() {
     echo "    service: https://127.0.0.1:8443"
     echo "  - hostname: $NODE_FQDN"
     echo "    service: http://127.0.0.1:8080"
+    echo "  - hostname: $NODE_FQDN:2022"
+    echo "    service: tcp://127.0.0.1:2022"
     local port
     for port in $(expand_ports "${GAME_PORTS:-25565-25575}"); do
       echo "  - hostname: $(game_fqdn "$port")"
@@ -339,7 +305,6 @@ cf_full_ensure() {
   cf_get_zone || return 1
   cf_ensure_tunnel || return 1
   cf_ensure_dns || return 1
-  cf_ensure_routes
   cf_write_config || return 1
   cf_ensure_certs || return 1
   cf_ensure_service || return 1

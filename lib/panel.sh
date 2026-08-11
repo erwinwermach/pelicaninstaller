@@ -1,6 +1,3 @@
-PANEL_FQDN=""
-NODE_FQDN=""
-
 php_modules_install() {
   local base=php8.3
   local core_ok=0

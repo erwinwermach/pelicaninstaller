@@ -26,6 +26,9 @@ set -a
 [ -f "$CONF_FILE" ] && . "$CONF_FILE"
 set +a
 
+PANEL_FQDN="${PANEL_FQDN:-${PANEL_SUBDOMAIN:-panel}.${DOMAIN:-}}"
+NODE_FQDN="${NODE_FQDN:-${NODE_SUBDOMAIN:-node}.${DOMAIN:-}}"
+
 banner() {
   echo ""
   echo "======================================================"
