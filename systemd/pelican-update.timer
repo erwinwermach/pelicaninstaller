@@ -1,0 +1,9 @@
+[Unit]
+Description=Run Pelican weekly self-updates
+
+[Timer]
+OnCalendar=Mon 04:00:00
+RandomizedDelaySec=6h
+
+[Install]
+WantedBy=timers.target

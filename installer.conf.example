@@ -1,0 +1,39 @@
+# Pelican installer - pre-filled configuration
+# Save as /etc/pelican-installer/installer.conf (mode 600) on the server,
+# or pass with: sudo bash installer.sh --config /path/to/this/file
+#
+# If this file does not exist, the installer asks the same questions once.
+
+# Your domain, managed by Cloudflare (no http://, no subdomain)
+DOMAIN=example.com
+
+# Cloudflare API token with permissions:
+#   Account: Cloudflare Tunnel - Edit
+#   Zone:    Zone - Read, DNS - Edit, SSL and Certificates - Edit
+# Create at https://dash.cloudflare.com/profile/api-tokens
+CF_API_TOKEN=
+
+# Optional: if your token cannot list accounts, paste your Account ID
+# (https://dash.cloudflare.com -> right sidebar -> Account ID)
+CF_ACCOUNT_ID=
+
+TIMEZONE=UTC
+
+PANEL_SUBDOMAIN=panel
+NODE_SUBDOMAIN=node
+GAME_SUBDOMAIN_PREFIX=game
+
+# Game ports to expose through the tunnel. Each port gets its own
+# hostname (game-25565.example.com) and its own TCP+UDP tunnel route.
+# Format: comma separated list, ranges allowed: 25565-25575,27015
+GAME_PORTS=25565-25575
+
+NODE_NAME=Node-1
+
+# Node resources in MB (empty = automatic: all memory minus 1GB, disk minus 10GB)
+NODE_MEMORY=
+NODE_DISK=
+NODE_CPU=100
+
+# Reboot the server automatically after install (verifies self-healing)
+AUTO_REBOOT=yes

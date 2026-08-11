@@ -1,0 +1,8 @@
+[Unit]
+Description=Pelican Weekly Self-Update
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/pelican-installer/bin/update.sh

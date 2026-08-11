@@ -1,0 +1,10 @@
+[Unit]
+Description=Run Pelican self-heal checks
+
+[Timer]
+OnBootSec=45s
+OnUnitActiveSec=300s
+RandomizedDelaySec=60s
+
+[Install]
+WantedBy=timers.target
