@@ -65,6 +65,14 @@ panel_phase() {
   log "Writing panel environment..."
   write_panel_env "$db_password" || die "Failed to write panel .env"
   (cd "$PANEL_DIR" && php artisan key:generate --force) >>"$INSTALL_LOG" 2>&1 || true
+  if ! grep -q '^APP_KEY=base64' "$PANEL_DIR/.env" 2>/dev/null; then
+    log "APP_KEY missing after key:generate - generating manually..."
+    local app_key
+    app_key="base64:$(openssl rand -base64 32)"
+    sed -i "s|^APP_KEY=.*|APP_KEY=$app_key|" "$PANEL_DIR/.env" 2>/dev/null \
+      || echo "APP_KEY=$app_key" >> "$PANEL_DIR/.env"
+  fi
+  grep -q '^APP_KEY=base64' "$PANEL_DIR/.env" || die "Failed to set APP_KEY"
 
   log "Migrating database and seeding eggs..."
   (cd "$PANEL_DIR" && php artisan migrate --seed --force) >>"$INSTALL_LOG" 2>&1 \
@@ -90,6 +98,7 @@ APP_ENV=production
 APP_ENVIRONMENT=production
 APP_DEBUG=false
 APP_INSTALLED=false
+APP_KEY=
 APP_URL=https://$PANEL_FQDN
 APP_TIMEZONE=${TIMEZONE:-UTC}
 APP_LOCALE=en

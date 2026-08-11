@@ -189,9 +189,11 @@ cf_config_content() {
     echo "ingress:"
     echo "  - hostname: $PANEL_FQDN"
     echo "    service: https://127.0.0.1:8443"
+    echo "    originRequest:"
+    echo "      noTLSVerify: true"
     echo "  - hostname: $NODE_FQDN"
     echo "    service: http://127.0.0.1:8080"
-    echo "  - hostname: $NODE_FQDN:2022"
+    echo "  - hostname: $NODE_FQDN"
     echo "    service: tcp://127.0.0.1:2022"
     local port
     for port in $(expand_ports "${GAME_PORTS:-25565-25575}"); do
