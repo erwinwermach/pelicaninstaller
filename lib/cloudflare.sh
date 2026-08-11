@@ -181,6 +181,13 @@ cf_ensure_dns() {
   done
 }
 
+game_origin_ip() {
+  local gw
+  gw=$(docker network inspect pelican_nw --format '{{(index .IPAM.Config 0).Gateway}}' 2>/dev/null)
+  [ -n "$gw" ] || gw=127.0.0.1
+  echo "$gw"
+}
+
 cf_config_content() {
   {
     echo "tunnel: $CF_TUNNEL_ID"
@@ -195,12 +202,13 @@ cf_config_content() {
     echo "    service: http://127.0.0.1:8080"
     echo "  - hostname: $NODE_FQDN"
     echo "    service: tcp://127.0.0.1:2022"
-    local port
+    local port origin
+    origin=$(game_origin_ip)
     for port in $(expand_ports "${GAME_PORTS:-25565-25575}"); do
       echo "  - hostname: $(game_fqdn "$port")"
-      echo "    service: tcp://127.0.0.1:$port"
+      echo "    service: tcp://$origin:$port"
       echo "  - hostname: $(game_fqdn "$port")"
-      echo "    service: udp://127.0.0.1:$port"
+      echo "    service: udp://$origin:$port"
     done
     echo "  - service: http_status:404"
   } > "$1"

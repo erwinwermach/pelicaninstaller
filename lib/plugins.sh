@@ -34,7 +34,7 @@ EOF
 
   log "Configuring Modpack Manager..."
   if [ -f "$PANEL_DIR/.env" ] && ! grep -q '^MODPACK_MANAGER_STORE_METADATA' "$PANEL_DIR/.env"; then
-    echo 'MODPACK_MANAGER_STORE_METADATA=true' >> "$PANEL_DIR/.env"
+    printf '\nMODPACK_MANAGER_STORE_METADATA=true\n' >> "$PANEL_DIR/.env"
   fi
 
   log "Tagging Java eggs as 'minecraft' (required for the Modpacks page)..."
