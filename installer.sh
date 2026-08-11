@@ -20,119 +20,6 @@ usage() {
   exit 0
 }
 
-while [ $# -gt 0 ]; do
-  case "$1" in
-    -c|--config) [ $# -ge 2 ] || usage; CONF_FILE_ARG=$2; shift 2 ;;
-    --no-reboot) AUTO_REBOOT_FLAG=no ;;
-    --skip-wipe) SKIP_WIPE=1 ;;
-    --no-self-update) NO_SELF_UPDATE=1 ;;
-    --update) FORCE_SELF_UPDATE=1 ;;
-    -h|--help) usage ;;
-    *) echo "Unknown option: $1"; usage ;;
-  esac
-done
-
-need_root
-check_os
-check_arch
-check_virt
-
-mkdir -p "$PI_ROOT" "$LOG_DIR" "$LOCK_DIR"
-chmod 700 "$PI_ROOT"
-
-exec 8>"$LOCK_DIR/pelican-installer.lock"
-flock -n 8 || die "Another installer/heal process is already running."
-
-if [ "$FORCE_SELF_UPDATE" = "1" ]; then
-  if self_update; then
-    echo "Installer scripts are up to date (version $(pi_local_version))."
-  else
-    echo "Installer scripts updated to version $(pi_local_version)."
-    echo "Re-run the installer to use the new version."
-  fi
-  exit 0
-fi
-
-if [ "${NO_SELF_UPDATE:-0}" != "1" ]; then
-  if ! self_update; then
-    exec bash "$SCRIPT_DIR/installer.sh" --no-self-update "$@"
-  fi
-fi
-
-if [ "${CONF_FILE_ARG:-}" != "" ]; then
-  cp -f "$CONF_FILE_ARG" "$CONF_FILE"
-  chmod 600 "$CONF_FILE"
-fi
-
-if [ ! -f "$CONF_FILE" ]; then
-  echo ""
-  echo "No configuration found yet. A few questions to set everything up:"
-  echo "(answers are saved to $CONF_FILE - everything after this is automatic)"
-  echo ""
-  collect_config
-else
-  log "Using existing configuration: $CONF_FILE"
-fi
-
-set -a
-. "$CONF_FILE"
-set +a
-
-validate_config
-
-if [ "$AUTO_REBOOT_FLAG" = "no" ]; then
-  AUTO_REBOOT=no
-fi
-
-PANEL_FQDN="$PANEL_SUBDOMAIN.$DOMAIN"
-NODE_FQDN="$NODE_SUBDOMAIN.$DOMAIN"
-
-# shellcheck source=../lib/wipe.sh
-. "$SCRIPT_DIR/lib/wipe.sh"
-# shellcheck source=../lib/base.sh
-. "$SCRIPT_DIR/lib/base.sh"
-# shellcheck source=../lib/panel.sh
-. "$SCRIPT_DIR/lib/panel.sh"
-# shellcheck source=../lib/cloudflare.sh
-. "$SCRIPT_DIR/lib/cloudflare.sh"
-# shellcheck source=../lib/wings.sh
-. "$SCRIPT_DIR/lib/wings.sh"
-# shellcheck source=../lib/node.sh
-. "$SCRIPT_DIR/lib/node.sh"
-
-STAGES_DIR="$PI_ROOT/stages"
-mkdir -p "$STAGES_DIR"
-
-run_phase() {
-  local name=$1
-  shift
-  if [ -f "$STAGES_DIR/$name" ]; then
-    log "Phase '$name' already completed - skipping."
-    return 0
-  fi
-  if [ "$SKIP_WIPE" = "1" ] && [ "$name" = "wipe" ]; then
-    log "Skipping wipe phase (--skip-wipe)."
-    touch "$STAGES_DIR/$name"
-    return 0
-  fi
-  if "$@"; then
-    touch "$STAGES_DIR/$name"
-  else
-    die "Phase '$name' failed. Fix the issue and re-run - it will resume."
-  fi
-}
-
-run_phase wipe wipe_phase
-run_phase base base_phase
-run_phase panel panel_phase
-run_phase cloudflare cloudflare_phase
-run_phase wings wings_phase
-run_phase nginx-enable nginx_enable_phase
-run_phase heal-install install_heal_system
-run_phase firewall ufw_setup
-
-finish_install
-
 collect_config() {
   local default_tz="UTC"
   if command -v timedatectl >/dev/null 2>&1; then
@@ -267,3 +154,120 @@ finish_install() {
     echo "Reboot manually when ready: sudo reboot"
   fi
 }
+
+run_phase() {
+  local name=$1
+  shift
+  if [ -f "$STAGES_DIR/$name" ]; then
+    log "Phase '$name' already completed - skipping."
+    return 0
+  fi
+  if [ "$SKIP_WIPE" = "1" ] && [ "$name" = "wipe" ]; then
+    log "Skipping wipe phase (--skip-wipe)."
+    touch "$STAGES_DIR/$name"
+    return 0
+  fi
+  if "$@"; then
+    touch "$STAGES_DIR/$name"
+  else
+    die "Phase '$name' failed. Fix the issue and re-run - it will resume."
+  fi
+}
+
+# ------------------------------------------------------------------
+# main flow
+# ------------------------------------------------------------------
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -c|--config) [ $# -ge 2 ] || usage; CONF_FILE_ARG=$2; shift 2 ;;
+    --no-reboot) AUTO_REBOOT_FLAG=no; shift ;;
+    --skip-wipe) SKIP_WIPE=1; shift ;;
+    --no-self-update) NO_SELF_UPDATE=1; shift ;;
+    --update) FORCE_SELF_UPDATE=1; shift ;;
+    -h|--help) usage ;;
+    *) echo "Unknown option: $1"; usage ;;
+  esac
+done
+
+need_root
+check_os
+check_arch
+check_virt
+
+mkdir -p "$PI_ROOT" "$LOG_DIR" "$LOCK_DIR"
+chmod 700 "$PI_ROOT"
+
+exec 8>"$LOCK_DIR/pelican-installer.lock"
+flock -n 8 || die "Another installer/heal process is already running."
+
+if [ "$FORCE_SELF_UPDATE" = "1" ]; then
+  if self_update; then
+    echo "Installer scripts are up to date (version $(pi_local_version))."
+  else
+    echo "Installer scripts updated to version $(pi_local_version)."
+    echo "Re-run the installer to use the new version."
+  fi
+  exit 0
+fi
+
+if [ "${NO_SELF_UPDATE:-0}" != "1" ]; then
+  if ! self_update; then
+    exec bash "$SCRIPT_DIR/installer.sh" --no-self-update "$@"
+  fi
+fi
+
+if [ "${CONF_FILE_ARG:-}" != "" ]; then
+  cp -f "$CONF_FILE_ARG" "$CONF_FILE"
+  chmod 600 "$CONF_FILE"
+fi
+
+if [ ! -f "$CONF_FILE" ]; then
+  echo ""
+  echo "No configuration found yet. A few questions to set everything up:"
+  echo "(answers are saved to $CONF_FILE - everything after this is automatic)"
+  echo ""
+  collect_config
+else
+  log "Using existing configuration: $CONF_FILE"
+fi
+
+set -a
+. "$CONF_FILE"
+set +a
+
+validate_config
+
+if [ "$AUTO_REBOOT_FLAG" = "no" ]; then
+  AUTO_REBOOT=no
+fi
+
+PANEL_FQDN="$PANEL_SUBDOMAIN.$DOMAIN"
+NODE_FQDN="$NODE_SUBDOMAIN.$DOMAIN"
+
+# shellcheck source=../lib/wipe.sh
+. "$SCRIPT_DIR/lib/wipe.sh"
+# shellcheck source=../lib/base.sh
+. "$SCRIPT_DIR/lib/base.sh"
+# shellcheck source=../lib/panel.sh
+. "$SCRIPT_DIR/lib/panel.sh"
+# shellcheck source=../lib/cloudflare.sh
+. "$SCRIPT_DIR/lib/cloudflare.sh"
+# shellcheck source=../lib/wings.sh
+. "$SCRIPT_DIR/lib/wings.sh"
+# shellcheck source=../lib/node.sh
+. "$SCRIPT_DIR/lib/node.sh"
+
+STAGES_DIR="$PI_ROOT/stages"
+mkdir -p "$STAGES_DIR"
+
+run_phase wipe wipe_phase
+run_phase base base_phase
+run_phase panel panel_phase
+run_phase cloudflare cloudflare_phase
+run_phase wings wings_phase
+run_phase nginx-enable nginx_enable_phase
+run_phase heal-install install_heal_system
+run_phase firewall ufw_setup
+
+finish_install

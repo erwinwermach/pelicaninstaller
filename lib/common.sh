@@ -18,7 +18,7 @@ PANEL_TLS_DIR="${PANEL_TLS_DIR:-/etc/pelican/tls}"
 PELICAN_ETC="${PELICAN_ETC:-/etc/pelican}"
 WINGS_BIN="${WINGS_BIN:-/usr/local/bin/wings}"
 TUNNEL_NAME_PREFIX=pelican
-LOCK_DIR=/run/lock
+LOCK_DIR="${LOCK_DIR:-/run/lock}"
 
 set -a
 [ -f "$CONF_FILE" ] && . "$CONF_FILE"
@@ -59,10 +59,12 @@ need_root() {
 }
 
 check_os() {
-  if [ ! -r /etc/os-release ]; then
+  local os_release="${OS_RELEASE_FILE:-/etc/os-release}"
+  if [ ! -r "$os_release" ]; then
     die "Cannot detect OS. Ubuntu Server 24.04 required."
   fi
-  . /etc/os-release
+  # shellcheck disable=SC1090
+  . "$os_release"
   if [ "$ID" != "ubuntu" ] || [[ "$VERSION_ID" != 24.04* ]]; then
     die "This installer targets Ubuntu Server 24.04 (found: ${PRETTY_NAME:-unknown})."
   fi
