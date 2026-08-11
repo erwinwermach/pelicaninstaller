@@ -316,8 +316,23 @@ ufw_setup() {
   local ssh_port=22
   ssh_port=$(ss -tlnp 2>/dev/null | awk '/sshd/ {gsub(/.*:/,"",$4); print $4; exit}')
   ssh_port=${ssh_port:-22}
-  ufw --force allow "$ssh_port/tcp" >>"$INSTALL_LOG" 2>&1 || true
+  ufw allow "$ssh_port/tcp" >>"$INSTALL_LOG" 2>&1 || true
+  ufw allow 22/tcp >>"$INSTALL_LOG" 2>&1 || true
+  if [ -n "${SSH_CONNECTION:-}" ]; then
+    local client_ip
+    client_ip=$(echo "$SSH_CONNECTION" | awk '{print $1}')
+    if [ -n "$client_ip" ]; then
+      ufw allow from "$client_ip" >>"$INSTALL_LOG" 2>&1 || true
+    fi
+  fi
   ufw default deny incoming >>"$INSTALL_LOG" 2>&1 || true
   ufw default allow outgoing >>"$INSTALL_LOG" 2>&1 || true
   ufw --force enable >>"$INSTALL_LOG" 2>&1 || true
+
+  if ! ufw status verbose | grep -qE '^22/tcp|^'"$ssh_port"'/tcp'; then
+    log_err "SSH allow rule missing after enabling the firewall - rolling back to avoid lockout!"
+    ufw --force disable >>"$INSTALL_LOG" 2>&1 || true
+    return 1
+  fi
+  log "Firewall active: SSH (port $ssh_port) open, everything else tunneled."
 }
