@@ -124,7 +124,8 @@ wait_network() {
   local tries=${1:-30}
   local i
   for i in $(seq 1 "$tries"); do
-    if curl -fsS -m 5 -o /dev/null https://api.cloudflare.com/client/v4/ 2>/dev/null; then
+    if curl -sS --connect-timeout 5 --max-time 8 -o /dev/null -w '%{http_code}' \
+      https://api.cloudflare.com/client/v4/ 2>/dev/null | grep -qE '^[0-9]{3}$'; then
       return 0
     fi
     sleep 2

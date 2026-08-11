@@ -36,6 +36,9 @@ collect_config() {
 
   tty_read TIMEZONE "Timezone [$default_tz]: " "$default_tz"
   TIMEZONE=${TIMEZONE:-$default_tz}
+  case "$TIMEZONE" in
+    utc|UTC) TIMEZONE=UTC ;;
+  esac
 
   tty_read PANEL_SUBDOMAIN "Panel subdomain [panel]: " "panel"
   PANEL_SUBDOMAIN=${PANEL_SUBDOMAIN:-panel}
