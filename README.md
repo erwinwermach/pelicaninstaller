@@ -28,8 +28,9 @@ Go to **https://dash.cloudflare.com/profile/api-tokens** → *Create Token* →
 Zone Resources: *Include → Specific zone → your domain*.
 Account Resources: *Include → your account*.
 
-If your token *cannot* list accounts (missing "Account Settings: Read"), also put your
-**Account ID** into the config file as `CF_ACCOUNT_ID`
+Note: the token does **not** need the "Account Settings: Read" permission —
+the installer derives your Account ID automatically from your zone. Only add
+`CF_ACCOUNT_ID` to the config file if the installer still cannot determine it
 (https://dash.cloudflare.com → right sidebar → *Account ID*).
 
 ### 2. Run the installer (one line)

@@ -58,6 +58,12 @@ cf_get_account() {
       return 0
     fi
   fi
+  log "Token cannot list accounts - deriving account id from zone lookup..."
+  cf_get_zone || return 1
+  CF_ACCOUNT_ID=$(echo "$CF_RESP" | jq -r '.result[0].account.id // empty' 2>/dev/null)
+  if [ -n "$CF_ACCOUNT_ID" ]; then
+    return 0
+  fi
   log_err "Could not determine Cloudflare account id from token."
   log_err "Add CF_ACCOUNT_ID=<account id> to $CONF_FILE (see https://dash.cloudflare.com -> your profile -> Account ID)."
   return 1
@@ -260,17 +266,31 @@ cf_ensure_certs() {
     fi
   fi
 
-  cf_api POST /certificates \
-    "{\"hostnames\":[\"$PANEL_FQDN\"],\"request_type\":\"origin-rsa\",\"requested_validity\":7884}"
+  mkdir -p "$cert_dir"
+  local key_file csr_file csr body
+  key_file=$(mktemp)
+  csr_file=$(mktemp)
+  openssl req -new -newkey rsa:2048 -nodes -keyout "$key_file" -out "$csr_file" \
+    -subj "//CN=$PANEL_FQDN" -addext "subjectAltName=DNS:$PANEL_FQDN" 2>/dev/null || {
+    rm -f "$key_file" "$csr_file"
+    log_err "Could not generate certificate key pair."
+    return 1
+  }
+  csr=$(cat "$csr_file")
+  body=$(jq -nc --arg h "$PANEL_FQDN" --arg csr "$csr" \
+    '{hostnames: [$h], request_type: "origin-rsa", requested_validity: 5475, csr: $csr}')
+
+  cf_api POST /certificates "$body"
   if ! cf_success; then
+    rm -f "$key_file" "$csr_file"
     log_err "Origin CA certificate issuance failed: $CF_RESP"
     log_err "Ensure your API token has 'SSL and Certificates > Edit' permission."
     return 1
   fi
 
-  mkdir -p "$cert_dir"
-  echo "$CF_RESP" | jq -r '.result.certificate' > "$cert"
-  echo "$CF_RESP" | jq -r '.result.key' > "$key"
+  echo "$CF_RESP" | jq -r '.result.certificate // empty' > "$cert" 2>/dev/null
+  cp -f "$key_file" "$key"
+  rm -f "$key_file" "$csr_file"
   chmod 644 "$cert"
   chmod 600 "$key"
   log "Origin CA certificate issued for $PANEL_FQDN."
