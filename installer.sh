@@ -260,6 +260,10 @@ NODE_FQDN="$NODE_SUBDOMAIN.$DOMAIN"
 . "$SCRIPT_DIR/lib/wings.sh"
 # shellcheck source=../lib/node.sh
 . "$SCRIPT_DIR/lib/node.sh"
+# shellcheck source=../lib/queue.sh
+. "$SCRIPT_DIR/lib/queue.sh"
+# shellcheck source=../lib/plugins.sh
+. "$SCRIPT_DIR/lib/plugins.sh"
 
 STAGES_DIR="$PI_ROOT/stages"
 mkdir -p "$STAGES_DIR"
@@ -273,6 +277,8 @@ run_phase cloudflare cloudflare_phase
 run_phase wings wings_phase
 run_phase nginx-enable nginx_enable_phase
 run_phase heal-install install_heal_system
+run_phase queue queue_phase
+run_phase plugins plugins_phase
 run_phase firewall ufw_setup
 
 finish_install
