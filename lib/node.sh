@@ -87,10 +87,11 @@ ensure_node_record() {
   body=$(jq -nc \
     --arg name "${NODE_NAME:-Node-1}" \
     --arg fqdn "$NODE_FQDN" \
+    --arg sftp "sftp.$DOMAIN" \
     --argjson memory "$NODE_MEMORY" \
     --argjson disk "$NODE_DISK" \
     --argjson cpu "$NODE_CPU" \
-    '{name: $name, description: "auto-installed", public: true, fqdn: $fqdn, scheme: "https", behind_proxy: true, daemon_base: "/var/lib/pelican/volumes", daemon_sftp: 2022, daemon_listen: 8080, daemon_connect: 443, memory: $memory, memory_overallocate: 0, disk: $disk, disk_overallocate: 0, cpu: $cpu, cpu_overallocate: 0, upload_size: 100, maintenance_mode: false}')
+    '{name: $name, description: "auto-installed", public: true, fqdn: $fqdn, scheme: "https", behind_proxy: true, daemon_base: "/var/lib/pelican/volumes", daemon_sftp: 2022, daemon_sftp_alias: $sftp, daemon_listen: 8080, daemon_connect: 443, memory: $memory, memory_overallocate: 0, disk: $disk, disk_overallocate: 0, cpu: $cpu, cpu_overallocate: 0, upload_size: 100, maintenance_mode: false}')
 
   log "Creating node '$NODE_NAME' ($NODE_FQDN)..."
   app_api POST /nodes "$body"
@@ -121,13 +122,13 @@ ensure_node_allocations() {
 
   log "Allocating game ports:$new_ports"
   local json
-  json=$(jq -nc --arg ip "127.0.0.1" --argjson ports "[$(for p in $new_ports; do echo -n "\"$p\","; done | sed 's/,$//')]" '{ip: $ip, ports: $ports}')
+  json=$(jq -nc --arg ip "0.0.0.0" --argjson ports "[$(for p in $new_ports; do echo -n "\"$p\","; done | sed 's/,$//')]" '{ip: $ip, ports: $ports}')
   app_api POST "/nodes/$NODE_ID/allocations" "$json"
   if [ "$APP_CODE" != "201" ] && [ "$APP_CODE" != "200" ] && [ "$APP_CODE" != "204" ]; then
     log_err "Bulk allocation failed ($APP_CODE) - retrying per port."
     local ok=0
     for port in $new_ports; do
-      app_api POST "/nodes/$NODE_ID/allocations" "{\"ip\":\"127.0.0.1\",\"ports\":[\"$port\"]}"
+      app_api POST "/nodes/$NODE_ID/allocations" "{\"ip\":\"0.0.0.0\",\"ports\":[\"$port\"]}"
       if [ "$APP_CODE" = "201" ] || [ "$APP_CODE" = "200" ] || [ "$APP_CODE" = "204" ]; then
         ok=1
       fi

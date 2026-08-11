@@ -154,38 +154,18 @@ EOF
   log "Tunnel created: $CF_TUNNEL_ID"
 }
 
-cf_ensure_dns() {
-  [ -n "$CF_TUNNEL_ID" ] || cf_ensure_tunnel || return 1
-  [ -n "$CF_ZONE_ID" ] || cf_get_zone || return 1
-  CF_ORIGIN_TARGET="$CF_TUNNEL_ID.cfargotunnel.com"
-
-  local host
-  for host in $(cf_hostnames_list); do
-    cf_api GET "/zones/$CF_ZONE_ID/dns_records?type=CNAME&name=$host"
-    local existing content
-    existing=$(echo "$CF_RESP" | jq -r '.result[0].id // empty' 2>/dev/null)
-    content=$(echo "$CF_RESP" | jq -r '.result[0].content // empty' 2>/dev/null)
-    if [ -n "$existing" ] && [ "$content" = "$CF_ORIGIN_TARGET" ]; then
-      continue
-    fi
-    if [ -n "$existing" ]; then
-      log "Fixing DNS record $host (was $content)..."
-      cf_api PATCH "/zones/$CF_ZONE_ID/dns_records/$existing" "{\"content\":\"$CF_ORIGIN_TARGET\",\"proxied\":true}"
-    else
-      log "Creating DNS record $host..."
-      cf_api POST "/zones/$CF_ZONE_ID/dns_records" "{\"type\":\"CNAME\",\"name\":\"$host\",\"content\":\"$CF_ORIGIN_TARGET\",\"proxied\":true}"
-    fi
-    if ! cf_success; then
-      log_err "DNS update failed for $host: $CF_RESP"
-    fi
-  done
-}
-
 game_origin_ip() {
   local gw
   gw=$(docker network inspect pelican_nw --format '{{(index .IPAM.Config 0).Gateway}}' 2>/dev/null)
   [ -n "$gw" ] || gw=127.0.0.1
   echo "$gw"
+}
+
+public_ip() {
+  local ip=""
+  ip=$(curl -fsS -m 10 https://api.ipify.org 2>/dev/null || true)
+  [ -n "$ip" ] || ip=$(curl -fsS -m 10 https://ifconfig.me 2>/dev/null || true)
+  echo "$ip"
 }
 
 cf_config_content() {
@@ -200,18 +180,65 @@ cf_config_content() {
     echo "      noTLSVerify: true"
     echo "  - hostname: $NODE_FQDN"
     echo "    service: http://127.0.0.1:8080"
-    echo "  - hostname: $NODE_FQDN"
-    echo "    service: tcp://127.0.0.1:2022"
-    local port origin
-    origin=$(game_origin_ip)
-    for port in $(expand_ports "${GAME_PORTS:-25565-25575}"); do
-      echo "  - hostname: $(game_fqdn "$port")"
-      echo "    service: tcp://$origin:$port"
-      echo "  - hostname: $(game_fqdn "$port")"
-      echo "    service: udp://$origin:$port"
-    done
     echo "  - service: http_status:404"
   } > "$1"
+}
+
+cf_dns_ensure() {
+  local rtype=$1 name=$2 content=$3 proxied=$4 host existing
+  host=$(echo "$name" | sed 's/[._]/\\&/g')
+  cf_api GET "/zones/$CF_ZONE_ID/dns_records?type=$rtype&name=$name"
+  existing=$(echo "$CF_RESP" | jq -r '.result[0].id // empty' 2>/dev/null)
+  if [ -n "$existing" ]; then
+    local cur
+    cur=$(echo "$CF_RESP" | jq -r '.result[0].content // empty' 2>/dev/null)
+    if [ "$cur" = "$content" ] && [ "$(echo "$CF_RESP" | jq -r '.result[0].proxied' 2>/dev/null)" = "$proxied" ]; then
+      return 0
+    fi
+    log "Fixing DNS record $name..."
+    cf_api PATCH "/zones/$CF_ZONE_ID/dns_records/$existing" "{\"type\":\"$rtype\",\"name\":\"$name\",\"content\":\"$content\",\"proxied\":$proxied}"
+  else
+    log "Creating DNS record $name..."
+    cf_api POST "/zones/$CF_ZONE_ID/dns_records" "{\"type\":\"$rtype\",\"name\":\"$name\",\"content\":\"$content\",\"proxied\":$proxied}"
+  fi
+  cf_success || log_err "DNS update failed for $name: $CF_RESP"
+}
+
+cf_ensure_dns() {
+  [ -n "$CF_TUNNEL_ID" ] || cf_ensure_tunnel || return 1
+  [ -n "$CF_ZONE_ID" ] || cf_get_zone || return 1
+  CF_ORIGIN_TARGET="$CF_TUNNEL_ID.cfargotunnel.com"
+
+  cf_dns_ensure CNAME "$PANEL_FQDN" "$CF_ORIGIN_TARGET" true
+  cf_dns_ensure CNAME "$NODE_FQDN" "$CF_ORIGIN_TARGET" true
+
+  local pub port
+  pub=$(public_ip)
+  if [ -n "$pub" ]; then
+    for port in $(expand_ports "${GAME_PORTS:-25565-25575}"); do
+      cf_dns_ensure A "$(game_fqdn "$port")" "$pub" false
+    done
+    cf_dns_ensure A "sftp.$DOMAIN" "$pub" false
+  else
+    log_err "Could not detect public IP - game hostnames not updated."
+  fi
+}
+
+upnp_ensure() {
+  command -v upnpc >/dev/null 2>&1 || apt-get install -y miniupnpc >>"$INSTALL_LOG" 2>&1 || return 0
+  if ! upnpc -s 2>/dev/null | grep -qi "ExternalIPAddress"; then
+    log "Router UPnP not available. Enable UPnP on the router or add manual port forwards:"
+    log "  ${GAME_PORTS:-25565-25575} TCP+UDP and 2022 TCP -> $(ip route get 1.1.1.1 2>/dev/null | awk '{print $7; exit}')"
+    return 0
+  fi
+  local lan_ip first last
+  lan_ip=$(ip route get 1.1.1.1 2>/dev/null | awk '{print $7; exit}')
+  first=${GAME_PORTS%%-*}
+  last=${GAME_PORTS##*-}
+  upnpc -a "$lan_ip" "$first" "$last" TCP >>"$INSTALL_LOG" 2>&1 || true
+  upnpc -a "$lan_ip" "$first" "$last" UDP >>"$INSTALL_LOG" 2>&1 || true
+  upnpc -a "$lan_ip" 2022 2022 TCP >>"$INSTALL_LOG" 2>&1 || true
+  log "UPnP port mappings ensured ($first-$last TCP/UDP + 2022)."
 }
 
 cf_write_config() {
@@ -318,16 +345,20 @@ cf_full_ensure() {
   cf_write_config || return 1
   cf_ensure_certs || return 1
   cf_ensure_service || return 1
+  upnp_ensure
   return 0
 }
 
 ufw_setup() {
-  log "Configuring firewall (only SSH open - everything else via tunnel)..."
+  log "Configuring firewall (SSH + game ports open, everything else tunneled)..."
   local ssh_port=22
   ssh_port=$(ss -tlnp 2>/dev/null | awk '/sshd/ {gsub(/.*:/,"",$4); print $4; exit}')
   ssh_port=${ssh_port:-22}
   ufw allow "$ssh_port/tcp" >>"$INSTALL_LOG" 2>&1 || true
   ufw allow 22/tcp >>"$INSTALL_LOG" 2>&1 || true
+  ufw allow "${GAME_PORTS:-25565-25575}/tcp" >>"$INSTALL_LOG" 2>&1 || true
+  ufw allow "${GAME_PORTS:-25565-25575}/udp" >>"$INSTALL_LOG" 2>&1 || true
+  ufw allow 2022/tcp >>"$INSTALL_LOG" 2>&1 || true
   if [ -n "${SSH_CONNECTION:-}" ]; then
     local client_ip
     client_ip=$(echo "$SSH_CONNECTION" | awk '{print $1}')
@@ -344,5 +375,5 @@ ufw_setup() {
     ufw --force disable >>"$INSTALL_LOG" 2>&1 || true
     return 1
   fi
-  log "Firewall active: SSH (port $ssh_port) open, everything else tunneled."
+  log "Firewall active: SSH (port $ssh_port) + game ports ${GAME_PORTS:-25565-25575} + SFTP 2022."
 }
