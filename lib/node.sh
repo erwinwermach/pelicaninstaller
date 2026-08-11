@@ -146,9 +146,9 @@ ensure_wings_config() {
     return 1
   fi
   mkdir -p "$PELICAN_ETC"
-  echo "$APP_RESP" | jq -r '.data // empty' > "$PELICAN_ETC/config.yml" 2>/dev/null
-  if [ ! -s "$PELICAN_ETC/config.yml" ]; then
-    log_err "Empty node configuration received."
+  echo "$APP_RESP" | jq -r . > "$PELICAN_ETC/config.yml" 2>/dev/null
+  if [ ! -s "$PELICAN_ETC/config.yml" ] || ! grep -q '"uuid"' "$PELICAN_ETC/config.yml"; then
+    log_err "Invalid node configuration received."
     return 1
   fi
   chmod 600 "$PELICAN_ETC/config.yml"
