@@ -59,7 +59,7 @@ if ! curl -k -sS -m 10 -o /dev/null https://127.0.0.1:8443/ 2>/dev/null; then
 fi
 
 if [ -f "$PELICAN_ETC/config.yml" ]; then
-  if ! curl -k -sS -m 10 -o /dev/null https://127.0.0.1:8080/api/system 2>/dev/null; then
+  if ! curl -sS -m 10 -o /dev/null http://127.0.0.1:8080/api/system 2>/dev/null; then
     hlog "wings API unreachable - restarting wings"
     restart_service wings
   fi
