@@ -268,6 +268,7 @@ run_phase wipe wipe_phase
 run_phase base base_phase
 run_phase panel panel_phase
 run_phase admin admin_phase
+run_phase egg-images egg_images_phase
 run_phase cloudflare cloudflare_phase
 run_phase wings wings_phase
 run_phase nginx-enable nginx_enable_phase

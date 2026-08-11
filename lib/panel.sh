@@ -224,6 +224,18 @@ admin_phase() {
   fi
 }
 
+egg_images_phase() {
+  banner "Phase 5/9 - Updating eggs with modern Java images"
+  log "Adding Java 21/22 docker images to Java-based eggs..."
+  mysql <<SQL 2>>"$INSTALL_LOG" || true
+UPDATE pelican.eggs
+SET docker_images = JSON_SET(docker_images, '$."Java 21"', 'ghcr.io/pelican-eggs/yolks:java_21', '$."Java 22"', 'ghcr.io/pelican-eggs/yolks:java_22')
+WHERE docker_images LIKE '%pterodactyl/yolks:java_%'
+  AND JSON_UNQUOTE(JSON_EXTRACT(docker_images, '$."Java 21"')) IS NULL;
+SQL
+  log "Egg images updated (modern Minecraft requires Java 21+)."
+}
+
 nginx_enable_phase() {
   banner "Phase 6/8 - Finalizing nginx behind tunnel"
   if [ ! -f "$PANEL_TLS_DIR/panel/fullchain.pem" ]; then
