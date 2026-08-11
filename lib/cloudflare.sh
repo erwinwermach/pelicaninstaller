@@ -108,17 +108,22 @@ cf_ensure_tunnel() {
   fi
   CF_TUNNEL_ID=$(echo "$CF_RESP" | jq -r '.result.id // empty' 2>/dev/null)
 
-  local secret account_tag
-  secret=$(echo "$CF_RESP" | jq -r '.result.secret // empty' 2>/dev/null)
-  account_tag=$CF_ACCOUNT_ID
+  local secret account_tag tok decoded
+  secret=$(echo "$CF_RESP" | jq -r '.result.credentials_file.TunnelSecret // empty' 2>/dev/null)
+  account_tag=$(echo "$CF_RESP" | jq -r '.result.credentials_file.AccountTag // empty' 2>/dev/null)
+  [ -n "$account_tag" ] || account_tag=$CF_ACCOUNT_ID
+
   if [ -z "$secret" ]; then
-    log "Tunnel created without visible secret - requesting tunnel token..."
+    log "Extracting tunnel secret from tunnel token..."
+    secret=$(echo "$CF_RESP" | jq -r '.result.token // empty' 2>/dev/null | tr '_-' '/+' | base64 -d 2>/dev/null | jq -r '.s // empty' 2>/dev/null)
+  fi
+
+  if [ -z "$secret" ]; then
+    log "Requesting tunnel token..."
     cf_api POST "/accounts/$CF_ACCOUNT_ID/cfd_tunnel/$CF_TUNNEL_ID/token"
     if cf_success; then
-      local tok
       tok=$(echo "$CF_RESP" | jq -r '.result.token // empty' 2>/dev/null)
       if [ -n "$tok" ]; then
-        local decoded
         decoded=$(echo "$tok" | tr '_-' '/+' | base64 -d 2>/dev/null || true)
         secret=$(echo "$decoded" | jq -r '.s // empty' 2>/dev/null)
         account_tag=$(echo "$decoded" | jq -r '.a // empty' 2>/dev/null)
