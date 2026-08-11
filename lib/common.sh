@@ -6,8 +6,10 @@ LOG_DIR="${LOG_DIR:-/var/log/pelican}"
 INSTALL_LOG="$LOG_DIR/install.log"
 PI_HOME="${PI_HOME:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 PI_REPO_BASE="${PI_REPO_BASE:-https://github.com/erwinwermach/pelicaninstaller}"
+PI_API_BASE="${PI_API_BASE:-https://api.github.com/repos/erwinwermach/pelicaninstaller}"
 PI_REPO_TARBALL="$PI_REPO_BASE/archive/refs/heads/main.tar.gz"
 PI_VERSION_URL="$PI_REPO_BASE/raw/main/VERSION"
+PI_VERSION_API_URL="$PI_API_BASE/contents/VERSION"
 CF_API_BASE=https://api.cloudflare.com/client/v4
 CF_CFG_DIR="${CF_CFG_DIR:-/etc/cloudflared}"
 CF_CFG_FILE="$CF_CFG_DIR/config.yml"
@@ -261,6 +263,17 @@ pi_fetch_update() {
   rm -rf "$tmp"
 }
 
+pi_remote_version() {
+  local v=""
+  v=$(curl -fsSL -m 20 "$PI_VERSION_API_URL" 2>/dev/null \
+    | jq -r '.content // empty' 2>/dev/null \
+    | tr -d '\n' | base64 -d 2>/dev/null || true)
+  if [ -z "$v" ]; then
+    v=$(curl -fsSL -m 20 "$PI_VERSION_URL" 2>/dev/null || true)
+  fi
+  echo "$v" | tr -d ' \t\r\n'
+}
+
 self_update() {
   if [ "$PI_HOME" != "/opt/pelican-installer" ] && [ "${PI_ALLOW_SELF_UPDATE:-0}" != "1" ]; then
     return 0
@@ -268,7 +281,7 @@ self_update() {
   command -v curl >/dev/null 2>&1 || return 0
   local remote_v local_v
   local_v=$(pi_local_version)
-  remote_v=$(curl -fsSL -m 30 "$PI_VERSION_URL" 2>/dev/null || true)
+  remote_v=$(pi_remote_version)
   [ -n "$remote_v" ] || return 0
   version_newer "$remote_v" "$local_v" || return 0
   log "New installer version $remote_v available (local ${local_v:-none}) - updating..."
