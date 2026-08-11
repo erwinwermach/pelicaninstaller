@@ -184,6 +184,46 @@ EOF
   ln -sf /etc/nginx/sites-available/pelican.conf /etc/nginx/sites-enabled/pelican.conf
 }
 
+admin_phase() {
+  banner "Phase 4/9 - Admin account (CLI, replaces broken web installer)"
+  local count
+  count=$(mysql -N -B -e "SELECT COUNT(*) FROM pelican.users;" 2>/dev/null || echo 0)
+  if [ "${count:-0}" -ge 1 ] 2>/dev/null; then
+    log "Admin account already exists."
+    return 0
+  fi
+
+  local admin_email admin_user admin_pass
+  admin_email=${ADMIN_EMAIL:-admin@$DOMAIN}
+  admin_user=${ADMIN_USERNAME:-admin}
+  admin_pass=$(random_hex 12)
+
+  log "Creating admin account ($admin_user / $admin_email)..."
+  (cd "$PANEL_DIR" && php artisan p:user:make --email="$admin_email" --username="$admin_user" \
+    --password="$admin_pass" --admin=1 --no-interaction) >>"$INSTALL_LOG" 2>&1 || true
+
+  count=$(mysql -N -B -e "SELECT COUNT(*) FROM pelican.users;" 2>/dev/null || echo 0)
+  if [ "${count:-0}" -ge 1 ] 2>/dev/null; then
+    sed -i 's/^APP_INSTALLED=.*/APP_INSTALLED=true/' "$PANEL_DIR/.env" 2>/dev/null || true
+    {
+      echo "ADMIN_EMAIL=$admin_email"
+      echo "ADMIN_USERNAME=$admin_user"
+      echo "ADMIN_PASSWORD=$admin_pass"
+    } >> "$SECRETS_FILE"
+    chmod 600 "$SECRETS_FILE"
+    log "Panel installation completed via CLI."
+    echo ""
+    echo "  ADMIN LOGIN:"
+    echo "    URL:      https://$PANEL_FQDN"
+    echo "    Username: $admin_user"
+    echo "    Password: $admin_pass"
+    echo ""
+  else
+    log_err "Admin account creation failed - create it manually:"
+    log_err "  cd /var/www/pelican && php artisan p:user:make --email you@example.com --username admin --admin=1"
+  fi
+}
+
 nginx_enable_phase() {
   banner "Phase 6/8 - Finalizing nginx behind tunnel"
   if [ ! -f "$PANEL_TLS_DIR/panel/fullchain.pem" ]; then

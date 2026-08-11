@@ -41,7 +41,7 @@ ensure_app_api_key() {
   perms="['server' => 3, 'node' => 3, 'allocation' => 3, 'user' => 3, 'egg' => 3, 'database_host' => 3, 'database' => 3, 'mount' => 3, 'role' => 3, 'plugin' => 3]"
 
   log "Creating panel Application API key..."
-  (cd "$PANEL_DIR" && php artisan tinker --execute="\Pelican\Models\ApiKey::create(['user_id' => 1, 'key_type' => 2, 'identifier' => '$id', 'token' => '$secret', 'memo' => 'auto-installer', 'permissions' => $perms, 'allowed_ips' => []]);") >>"$INSTALL_LOG" 2>&1 || true
+  (cd "$PANEL_DIR" && php artisan tinker --execute="\App\Models\ApiKey::create(['user_id' => 1, 'key_type' => 2, 'identifier' => '$id', 'token' => '$secret', 'memo' => 'auto-installer', 'permissions' => $perms, 'allowed_ips' => []]);") >>"$INSTALL_LOG" 2>&1 || true
 
   API_KEY_ID=$id
   API_KEY_SECRET=$secret

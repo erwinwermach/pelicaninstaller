@@ -140,15 +140,15 @@ finish_install() {
   echo "  Node:       https://$NODE_FQDN"
   echo "  Game ports: tunneled via $(game_fqdn "${GAME_PORTS%%-*}") through $(game_fqdn "${GAME_PORTS##*-}")"
   echo ""
-  echo "  THE ONLY MANUAL STEP:"
-  echo "  Open https://$PANEL_FQDN/installer in your browser and create"
-  echo "  the admin account. The node, wings, ports and routing are then"
-  echo "  configured automatically within 5 minutes."
+  echo "  Admin login: username 'admin' - see $SECRETS_FILE for the password"
+  echo "  (The web installer at /installer is disabled - Pelican beta bug:"
+  echo "   Livewire requests are redirected while the app is not installed,"
+  echo "   so the admin account is created automatically via CLI instead.)"
   echo ""
   echo "  Logs:   /var/log/pelican/   (install.log, heal.log, update.log)"
   echo "  Config: $CONF_FILE"
   echo ""
-  log "Panel is reachable at https://$PANEL_FQDN/installer"
+  log "Panel is reachable at https://$PANEL_FQDN"
 
   if [ "$AUTO_REBOOT" = "yes" ] || [ "$AUTO_REBOOT" = "true" ]; then
     log "Rebooting in 15 seconds to verify the self-heal system (services, tunnel, DNS and Wings will all come back automatically)."
@@ -267,6 +267,7 @@ mkdir -p "$STAGES_DIR"
 run_phase wipe wipe_phase
 run_phase base base_phase
 run_phase panel panel_phase
+run_phase admin admin_phase
 run_phase cloudflare cloudflare_phase
 run_phase wings wings_phase
 run_phase nginx-enable nginx_enable_phase
