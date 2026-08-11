@@ -103,8 +103,18 @@ cf_ensure_tunnel() {
   log "Creating Cloudflare tunnel '$name'..."
   cf_api POST "/accounts/$CF_ACCOUNT_ID/cfd_tunnel" "{\"name\":\"$name\"}"
   if ! cf_success; then
-    log_err "Tunnel creation failed: $CF_RESP"
-    return 1
+    if echo "$CF_RESP" | grep -q '1013'; then
+      log "Tunnel name already exists (orphaned from a previous attempt) - removing it and retrying..."
+      cf_api GET "/accounts/$CF_ACCOUNT_ID/cfd_tunnel?name=$name"
+      local existing_id
+      existing_id=$(echo "$CF_RESP" | jq -r --arg n "$name" '.result[]? | select(.name == $n) | .id // empty' 2>/dev/null)
+      [ -n "$existing_id" ] && cf_api DELETE "/accounts/$CF_ACCOUNT_ID/cfd_tunnel/$existing_id"
+      cf_api POST "/accounts/$CF_ACCOUNT_ID/cfd_tunnel" "{\"name\":\"$name\"}"
+    fi
+    if ! cf_success; then
+      log_err "Tunnel creation failed: $CF_RESP"
+      return 1
+    fi
   fi
   CF_TUNNEL_ID=$(echo "$CF_RESP" | jq -r '.result.id // empty' 2>/dev/null)
 

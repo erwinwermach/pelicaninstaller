@@ -176,7 +176,14 @@ cf_api() {
 }
 
 cf_success() {
-  [ "$CF_CODE" = "200" ] || [ "$CF_CODE" = "201" ] || [ "$CF_CODE" = "204" ]
+  case "$CF_CODE" in
+    200|201|204) ;;
+    *) return 1 ;;
+  esac
+  if [ -n "$CF_RESP" ]; then
+    echo "$CF_RESP" | grep -q '"success":true' || return 1
+  fi
+  return 0
 }
 
 ensure_service() {
