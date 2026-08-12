@@ -48,6 +48,7 @@ ISSUE_PATTERNS = [
     (re.compile(r"UnsupportedClassVersionError|class file version \d+"), "Java version mismatch - the server needs a different Java version."),
     (re.compile(r"Unable to access jarfile|no main manifest attribute|Could not find or load main class"), "Startup jar missing or broken - use the Health page repair."),
     (re.compile(r"Invalid or corrupt jarfile"), "Corrupt server jar - reinstall or repair it."),
+    (re.compile(r"NoClassDefFoundError: org/apache/logging/log4j|ClassNotFoundException: org\.apache\.logging\.log4j"), "A mod requires log4j classes that are not bundled in this Minecraft/loader version - update or remove the affected mod."),
     (re.compile(r"ClassNotFoundException"), "Missing class/library - the server files are incomplete."),
     (re.compile(r"Could not reserve enough space for object heap|Invalid maximum heap size"), "Heap size misconfigured - lower -Xmx or free memory on the host."),
     (re.compile(r"Address already in use|EADDRINUSE|bind: cannot assign|Failed to bind"), "Port already in use - another process is holding the server port."),
