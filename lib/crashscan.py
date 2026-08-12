@@ -40,6 +40,8 @@ EXIT_HINTS = {
 }
 
 ISSUE_PATTERNS = [
+    (re.compile(r"Missing game jar at|couldn't locate the game|could not locate the game"), "Game jar missing or corrupt - the launcher cannot find it; use the Health page repair."),
+    (re.compile(r"AccessDeniedException"), "File permission problem - files were extracted without read permissions (common with modpack installs); the watchdog fixes these automatically."),
     (re.compile(r"Mod resolution failed|Incompatible mods found|HARD_DEP"), "Mod incompatibility - conflicting or missing mod dependencies (see the resolution details)."),
     (re.compile(r"requires version \d+ or later of 'OpenJDK[^']*' \(java\)"), "A mod requires a newer Java version than the server runs - update the egg's Java/docker image."),
     (re.compile(r"requires version \d+ or later"), "A component requires a newer version than provided - version mismatch."),

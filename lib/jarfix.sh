@@ -40,6 +40,12 @@ server_jars_fix() {
           mysql -e "UPDATE pelican.server_variables sv JOIN pelican.egg_variables ev ON ev.id=sv.variable_id SET sv.variable_value='fabric-server-launch.jar' WHERE ev.env_variable='SERVER_JARFILE' AND sv.server_id=(SELECT id FROM pelican.servers WHERE uuid='$uuid');" 2>/dev/null || true
           fixed=true
         fi
+        if [ -f "$srvdir/fabric-server-launcher.properties" ] && grep -q '^serverJar=' "$srvdir/fabric-server-launcher.properties" && [ ! -f "$srvdir/server.jar" ]; then
+          ln -sf minecraft-server.jar "$srvdir/server.jar"
+          chown -h pelican:pelican "$srvdir/server.jar" 2>/dev/null || true
+          log "Server $uuid: linked server.jar -> minecraft-server.jar (fabric launcher requirement)."
+          fixed=true
+        fi
         ok=true
         size=$(stat -c %s "$srvdir/minecraft-server.jar" 2>/dev/null || echo 0)
         rep="$rep:$uuid:$ok:$jarfile:$size:$fixed"
@@ -135,4 +141,28 @@ process_repair_requests() {
     server_jars_fix
     rm -f "$req"
   done
+}
+
+server_permissions_fix() {
+  command -v mysql >/dev/null 2>&1 || return 0
+  local uuid srvdir fixed
+  while IFS=$'\t' read -r uuid; do
+    [ -n "$uuid" ] || continue
+    srvdir="/var/lib/pelican/volumes/$uuid"
+    [ -d "$srvdir" ] || continue
+    fixed=false
+    if [ "$(find "$srvdir" -type f ! -perm -004 2>/dev/null | wc -l)" -gt 0 ]; then
+      find "$srvdir" -type f ! -perm -004 -exec chmod 644 {} \; 2>/dev/null
+      fixed=true
+    fi
+    if [ "$(find "$srvdir" -type d ! -perm -005 2>/dev/null | wc -l)" -gt 0 ]; then
+      find "$srvdir" -type d ! -perm -005 -exec chmod 755 {} \; 2>/dev/null
+      fixed=true
+    fi
+    if [ "$fixed" = "true" ]; then
+      chown -R pelican:pelican "$srvdir" 2>/dev/null || true
+      log "Server $uuid: fixed unreadable files (modpack extraction permissions)."
+    fi
+  done < <(mysql -N -B -e "SELECT s.uuid FROM pelican.servers s WHERE s.uuid IS NOT NULL;" 2>/dev/null)
+  return 0
 }

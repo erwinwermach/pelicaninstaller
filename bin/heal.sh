@@ -82,6 +82,7 @@ fi
 . "$HEAL_DIR/lib/jarfix.sh"
 process_repair_requests
 server_jars_fix
+server_permissions_fix
 
 # shellcheck source=../lib/crashscan.sh
 . "$HEAL_DIR/lib/crashscan.sh"
