@@ -3,8 +3,9 @@ PLAYIT_MAP_FILE="$PI_ROOT/playit-tunnels.json"
 
 playit_api() {
   local method=$1 path=$2 body=${3:-}
+  local key="${PLAYIT_API_KEY:-$PLAYIT_SECRET_KEY}"
   local args=(-sS -X "$method" "$PLAYIT_API_BASE$path" \
-    -H "Authorization: Bearer $PLAYIT_API_KEY" \
+    -H "Authorization: Agent-Key $key" \
     -H "Content-Type: application/json")
   if [ -n "$body" ]; then
     args+=(-d "$body")
@@ -18,8 +19,8 @@ playit_agent_id() {
 }
 
 playit_ensure_tunnels() {
-  if [ -z "${PLAYIT_API_KEY:-}" ]; then
-    log "No PLAYIT_API_KEY configured - playit tunnels not managed (add it to $CONF_FILE)."
+  if [ -z "${PLAYIT_SECRET_KEY:-}" ] && [ -z "${PLAYIT_API_KEY:-}" ]; then
+    log "No PLAYIT_SECRET_KEY configured - playit tunnels not managed (add it to $CONF_FILE)."
     return 0
   fi
   command -v docker >/dev/null 2>&1 || return 0

@@ -40,13 +40,11 @@ AUTO_REBOOT=yes
 
 # Optional: playit.gg agent (free game-server tunneling through CGNAT).
 # Get the secret key at https://playit.gg -> Account -> Secret Key.
-# Leave empty to skip. Create TCP tunnels afterwards at
-# https://playit.gg -> Tunnels for each game port.
+# Leave empty to skip. The secret key also authenticates the playit API,
+# so tunnel creation/sync is fully automatic (one TCP tunnel per
+# allocation, named pelican-<port>; addresses written to
+# /etc/pelican-installer/playit-tunnels.json for the panel plugin).
 PLAYIT_SECRET_KEY=
 
-# Optional: playit.gg API key (https://playit.gg -> Account -> API keys).
-# When set, the installer/heal automatically creates one playit tunnel per
-# allocation (named pelican-<port>) and writes the public addresses to
-# /etc/pelican-installer/playit-tunnels.json, which the panel plugin shows
-# on each server's page instead of the raw IP.
+# Alternative: a playit.gg API key (Account -> API keys) if you have one.
 PLAYIT_API_KEY=
