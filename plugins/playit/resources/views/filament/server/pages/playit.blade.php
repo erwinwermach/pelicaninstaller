@@ -71,11 +71,11 @@
                         @endif
                     </div>
 
-                    @if($row['cf_hostname'])
-                        <div class="border-t pt-3">
-                            <p class="text-sm text-gray-500 dark:text-gray-400">
-                                Cloudflare (HTTP apps — Python/JS/Node/Discord bots, web servers)
-                            </p>
+                    <div class="border-t pt-3">
+                        <p class="text-sm text-gray-500 dark:text-gray-400">
+                            Cloudflare (HTTP apps — Python/JS/Node/Discord bots, web servers)
+                        </p>
+                        @if($row['cf_supported'])
                             @if($row['cf_active'])
                                 <p class="font-semibold text-success-600 dark:text-success-400">
                                     {{ $row['cf_hostname'] }} — active
@@ -94,8 +94,14 @@
                                     <code>sudo bash /opt/pelican-installer/installer.sh</code>.
                                 </p>
                             @endif
-                        </div>
-                    @endif
+                        @else
+                            <p class="text-sm text-gray-500 dark:text-gray-400">
+                                Not available on port {{ $row['port'] }} — Cloudflare only forwards
+                                HTTP ports (80/443/8080/8443/2052-2087/2095-2096) publicly.
+                                Game TCP/UDP on this port is served via playit.gg.
+                            </p>
+                        @endif
+                    </div>
                 </div>
             </x-filament::section>
         @endforeach

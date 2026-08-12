@@ -27,6 +27,7 @@ class Playit extends Page
                 'port' => $allocation->port,
                 'playit_address' => $map[(string) $allocation->port] ?? null,
                 'cf_hostname' => $this->isCfPort($port) ? "app-$port." . $this->domain() : null,
+                'cf_supported' => $this->isCfPort($port),
                 'cf_active' => $cfEnabled && $this->isCfPort($port),
             ];
         }
