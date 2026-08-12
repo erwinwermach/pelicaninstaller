@@ -80,7 +80,36 @@ fi
 
 # shellcheck source=../lib/jarfix.sh
 . "$HEAL_DIR/lib/jarfix.sh"
+process_repair_requests
 server_jars_fix
+
+write_health_json() {
+  mkdir -p /var/www/pelican/storage/app
+  {
+    echo "{"
+    echo "  \"last_heal\": \"$(date -Is)\","
+    echo "  \"disk_used\": ${disk_used:-0},"
+    echo "  \"services\": {"
+    first=1
+    for s in mariadb redis-server php8.3-fpm nginx docker cloudflared wings pelican-queue; do
+      if [ "$first" -ne 1 ]; then echo ","; fi
+      first=0
+      st=$(systemctl is-active "$s" 2>/dev/null || true)
+      [ -n "$st" ] || st=unknown
+      printf '    "%s": "%s"' "$s" "$st"
+    done
+    if [ "$first" -ne 1 ]; then echo ","; fi
+    st=inactive
+    docker ps --format '{{.Names}}' 2>/dev/null | grep -qx playit-agent && st=active
+    printf '    "playit-agent": "%s"' "$st"
+    echo ""
+    echo "  }"
+    echo "}"
+  } > /var/www/pelican/storage/app/pelican-health.json 2>/dev/null || true
+  chown www-data:www-data /var/www/pelican/storage/app/pelican-health.json 2>/dev/null || true
+}
+
+write_health_json
 
 disk_used=$(df -Pk / | awk 'NR==2 {gsub(/%/,"",$5); print $5}')
 if [ "${disk_used:-0}" -gt 85 ]; then
