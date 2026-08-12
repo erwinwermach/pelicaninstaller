@@ -65,14 +65,13 @@ playit_ensure_tunnels() {
   playit_api POST /v1/agents/rundata '{}'
   if echo "$PLAYIT_RESP" | jq -e . >/dev/null 2>&1; then
     echo "$PLAYIT_RESP" | jq -r '
-      .data.tunnels[]?
-      | select(.port_type == "tcp" or .port_type == "udp")
-      | .agent_config.fields as $f
-      | ($f[] | select(.name == "local_port") | .value) as $port
-      | select($port != null)
-      | [$port, .display_address] | @tsv' 2>/dev/null \
-      | awk -F'\t' '{printf "\"%s\":\"%s\"\n", $1, $2}' \
-      | jq -s 'from_entries // {}' > "$PLAYIT_MAP_FILE" 2>/dev/null || true
+      [.data.tunnels[]?
+       | select(.port_type == "tcp" or .port_type == "udp")
+       | .agent_config.fields as $f
+       | ($f[] | select(.name == "local_port") | .value) as $port
+       | select($port != null)
+       | {key: $port, value: .display_address}]
+      | from_entries' 2>/dev/null > "$PLAYIT_MAP_FILE" || true
     chmod 644 "$PLAYIT_MAP_FILE" 2>/dev/null || true
     log "playit tunnel map updated ($PLAYIT_MAP_FILE)."
   fi
