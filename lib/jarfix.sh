@@ -104,11 +104,16 @@ server_jars_fix() {
           [ -z "$launch_jar" ] && [ -f "$stage/server.jar" ] && launch_jar=server.jar
 
           if [ -n "$launch_jar" ]; then
+            rm -f "$srvdir/$launch_jar"
             cp -f "$stage/$launch_jar" "$srvdir/$launch_jar"
             game_jar=$(find "$stage/versions" -name 'server-*.jar' -size +100k 2>/dev/null | head -1)
             if [ -n "$game_jar" ]; then
               cp -f "$game_jar" "$srvdir/minecraft-server.jar"
-              [ ! -e "$srvdir/server.jar" ] && ln -sf minecraft-server.jar "$srvdir/server.jar" && chown -h pelican:pelican "$srvdir/server.jar" 2>/dev/null || true
+              if [ ! -e "$srvdir/server.jar" ] || [ "$(stat -c %s "$srvdir/server.jar" 2>/dev/null || echo 0)" -lt 100000 ]; then
+                ln -sfn minecraft-server.jar "$srvdir/server.jar"
+                chown -h pelican:pelican "$srvdir/server.jar" 2>/dev/null || true
+                fixed=true
+              fi
             fi
             cp -rn "$stage/libraries/." "$srvdir/libraries/" 2>/dev/null || true
             cp -rn "$stage/versions/." "$srvdir/versions/" 2>/dev/null || true
