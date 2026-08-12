@@ -32,43 +32,53 @@ server_jars_fix() {
     fixed=false
     size=0
 
-    # Fabric layout: fabric-server-launch.jar is a small stub by design; the
-    # real game jar lives at minecraft-server.jar next to it.
     if [ -f "$srvdir/fabric-server-launch.jar" ]; then
+      # Fabric layout: fabric-server-launch.jar is the launcher stub, the real
+      # game jar lives at server.jar (launcher properties) or minecraft-server.jar.
+      launch_size=$(stat -c %s "$srvdir/fabric-server-launch.jar" 2>/dev/null || echo 0)
+      game_jar=""
       if [ -f "$srvdir/minecraft-server.jar" ] && [ "$(stat -c %s "$srvdir/minecraft-server.jar" 2>/dev/null || echo 0)" -gt 100000 ]; then
+        game_jar=minecraft-server.jar
+      elif [ -f "$srvdir/server.jar" ] && [ "$(stat -c %s "$srvdir/server.jar" 2>/dev/null || echo 0)" -gt 100000 ]; then
+        game_jar=server.jar
+      fi
+      if [ "$launch_size" -lt 200000 ] && [ -n "$game_jar" ]; then
         if [ "$jarfile" != "fabric-server-launch.jar" ]; then
           mysql -e "UPDATE pelican.server_variables sv JOIN pelican.egg_variables ev ON ev.id=sv.variable_id SET sv.variable_value='fabric-server-launch.jar' WHERE ev.env_variable='SERVER_JARFILE' AND sv.server_id=(SELECT id FROM pelican.servers WHERE uuid='$uuid');" 2>/dev/null || true
           fixed=true
         fi
-        if [ -f "$srvdir/fabric-server-launcher.properties" ] && grep -q '^serverJar=' "$srvdir/fabric-server-launcher.properties" && [ ! -f "$srvdir/server.jar" ]; then
-          ln -sf minecraft-server.jar "$srvdir/server.jar"
-          chown -h pelican:pelican "$srvdir/server.jar" 2>/dev/null || true
-          log "Server $uuid: linked server.jar -> minecraft-server.jar (fabric launcher requirement)."
+        expected_jar=$(grep '^serverJar=' "$srvdir/fabric-server-launcher.properties" 2>/dev/null | cut -d= -f2-)
+        expected_jar=${expected_jar:-server.jar}
+        if [ "$game_jar" != "$expected_jar" ] && [ ! -e "$srvdir/$expected_jar" ]; then
+          ln -sf "$game_jar" "$srvdir/$expected_jar"
+          chown -h pelican:pelican "$srvdir/$expected_jar" 2>/dev/null || true
+          log "Server $uuid: linked $expected_jar -> $game_jar (fabric launcher requirement)."
           fixed=true
         fi
         ok=true
-        size=$(stat -c %s "$srvdir/minecraft-server.jar" 2>/dev/null || echo 0)
+        size=$(stat -c %s "$srvdir/$game_jar" 2>/dev/null || echo 0)
         rep="$rep:$uuid:$ok:$jarfile:$size:$fixed"
         continue
       fi
-    fi
+      # fabric launcher present but game jar missing - fall through to installer
+    else
+      if [ -f "$expected" ] && [ "$(stat -c %s "$expected" 2>/dev/null || echo 0)" -gt 100000 ]; then
+        ok=true
+        size=$(stat -c %s "$expected" 2>/dev/null || echo 0)
+        rep="$rep:$uuid:$ok:$jarfile:$size:$fixed"
+        continue
+      fi
 
-    if [ -f "$expected" ] && [ "$(stat -c %s "$expected" 2>/dev/null || echo 0)" -gt 100000 ]; then
-      ok=true
-      size=$(stat -c %s "$expected" 2>/dev/null || echo 0)
-      rep="$rep:$uuid:$ok:$jarfile:$size:$fixed"
-      continue
-    fi
-
-    candidate=$(find "$srvdir" -maxdepth 1 -name '*.jar' -size +100k ! -name '*installer*' ! -name '*launch*' ! -name 'minecraft-server.jar' 2>/dev/null | head -1)
-    if [ -n "$candidate" ]; then
-      log "Server $uuid: linking $jarfile -> $(basename "$candidate")"
-      ln -sf "$(basename "$candidate")" "$expected"
-      ok=true
-      fixed=true
-      size=$(stat -c %s "$expected" 2>/dev/null || echo 0)
-      rep="$rep:$uuid:$ok:$jarfile:$size:$fixed"
-      continue
+      candidate=$(find "$srvdir" -maxdepth 1 -name '*.jar' -size +100k ! -name '*installer*' ! -name '*launch*' ! -name 'minecraft-server.jar' 2>/dev/null | head -1)
+      if [ -n "$candidate" ]; then
+        log "Server $uuid: linking $jarfile -> $(basename "$candidate")"
+        ln -sf "$(basename "$candidate")" "$expected"
+        ok=true
+        fixed=true
+        size=$(stat -c %s "$expected" 2>/dev/null || echo 0)
+        rep="$rep:$uuid:$ok:$jarfile:$size:$fixed"
+        continue
+      fi
     fi
 
     mc=$(server_var "$uuid" MC_VERSION)
@@ -98,6 +108,7 @@ server_jars_fix() {
             game_jar=$(find "$stage/versions" -name 'server-*.jar' -size +100k 2>/dev/null | head -1)
             if [ -n "$game_jar" ]; then
               cp -f "$game_jar" "$srvdir/minecraft-server.jar"
+              [ ! -e "$srvdir/server.jar" ] && ln -sf minecraft-server.jar "$srvdir/server.jar" && chown -h pelican:pelican "$srvdir/server.jar" 2>/dev/null || true
             fi
             cp -rn "$stage/libraries/." "$srvdir/libraries/" 2>/dev/null || true
             cp -rn "$stage/versions/." "$srvdir/versions/" 2>/dev/null || true
