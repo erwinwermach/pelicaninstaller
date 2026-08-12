@@ -65,7 +65,7 @@ playit_ensure_tunnels() {
   playit_api POST /v1/agents/rundata '{}'
   if echo "$PLAYIT_RESP" | jq -e . >/dev/null 2>&1; then
     echo "$PLAYIT_RESP" | jq -r '
-      .tunnels[]?
+      .data.tunnels[]?
       | select(.port_type == "tcp" or .port_type == "udp")
       | .agent_config.fields as $f
       | ($f[] | select(.name == "local_port") | .value) as $port
