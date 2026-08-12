@@ -278,7 +278,9 @@ def scan_wings_crashes(state, servers, now_ts):
         ts = int(float(obj.get("__REALTIME_TIMESTAMP", 0)) / 1000000)
         if ts <= cursor:
             continue
-        msg = (obj.get("MESSAGE") or "")
+        msg = obj.get("MESSAGE") or ""
+        if isinstance(msg, list):
+            msg = "\n".join(str(part) for part in msg)
         if not re.search(r"entering a crashed state|crash handler", msg):
             continue
         m = re.search(r"server=([0-9a-f-]{36})", msg)
@@ -323,7 +325,10 @@ def scan_journals(state):
                 continue
             max_ts = max(max_ts, ts)
             prio = int(obj.get("PRIORITY", 4))
-            msg = (obj.get("MESSAGE") or "").strip()
+            msg = obj.get("MESSAGE") or ""
+            if isinstance(msg, list):
+                msg = "\n".join(str(part) for part in msg)
+            msg = msg.strip()
             if not msg:
                 continue
             if svc == "wings" and re.search(r"entering a crashed state|crash handler", msg):
