@@ -121,6 +121,13 @@
                                     >
                                         Export
                                     </button>
+                                    <button
+                                        type="button"
+                                        wire:click="upload('{{ $e['id'] }}')"
+                                        class="rounded-lg bg-gray-100 px-2.5 py-1 text-xs font-medium text-gray-700 transition hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
+                                    >
+                                        Upload
+                                    </button>
                                 </div>
                             </div>
                             @if($e['issue'])
@@ -150,4 +157,24 @@
             </p>
         @endforelse
     </x-filament::section>
+
+    <div x-data @copylink.window="navigator.clipboard.writeText($event.detail.url)"></div>
+
+    @if($uploadedUrl)
+        <x-filament::section>
+            <x-slot name="heading">Uploaded log</x-slot>
+            <div class="flex flex-wrap items-center gap-3">
+                <a href="{{ $uploadedUrl }}" target="_blank" class="text-primary-600 underline dark:text-primary-400">{{ $uploadedUrl }}</a>
+                <button
+                    type="button"
+                    x-data="{ copied: false }"
+                    @click="navigator.clipboard.writeText('{{ $uploadedUrl }}'); copied = true; setTimeout(() => copied = false, 2000)"
+                    class="rounded-lg bg-gray-100 px-3 py-1.5 text-xs font-medium text-gray-700 transition hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
+                >
+                    <span x-show="!copied">Copy link</span>
+                    <span x-show="copied" class="text-success-600">Copied!</span>
+                </button>
+            </div>
+        </x-filament::section>
+    @endif
 </x-filament-panels::page>
