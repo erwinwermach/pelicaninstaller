@@ -20,7 +20,7 @@ tunnel creation for allocations.
 
 ## Manual tunnel setup (fallback, no API key)
 1. https://playit.gg -> sign in -> **Tunnels**
-2. **New Tunnel** -> TCP -> Local address `192.168.10.41`, port `25565`
+2. **New Tunnel** -> TCP -> Local address `<server-lan-ip>`, port `25565`
    (repeat for 25566..25575 as needed).
 3. Players join the assigned `xxxx.playit.gg:NNNNN` address.
 

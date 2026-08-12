@@ -1,0 +1,13 @@
+# Internal-only file (contains operational details for development sessions,
+# not meant for public users of this tool)
+AGENTS.md
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
+
+# local logs
+*.log
