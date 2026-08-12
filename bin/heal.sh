@@ -84,6 +84,8 @@ process_repair_requests
 server_jars_fix
 
 write_health_json() {
+  local disk_used
+  disk_used=$(df -Pk / | awk 'NR==2 {gsub(/%/,"",$5); print $5}')
   mkdir -p /var/www/pelican/storage/app
   {
     echo "{"
@@ -110,11 +112,6 @@ write_health_json() {
 }
 
 write_health_json
-
-disk_used=$(df -Pk / | awk 'NR==2 {gsub(/%/,"",$5); print $5}')
-if [ "${disk_used:-0}" -gt 85 ]; then
-  hlog "WARNING: disk usage at ${disk_used}%"
-fi
 
 hlog "heal run complete"
 exit 0
