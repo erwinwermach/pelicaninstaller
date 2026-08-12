@@ -32,7 +32,7 @@ playit_ensure_tunnels() {
   local agent_id
   agent_id=$(playit_agent_id)
   [ -n "$agent_id" ] || {
-    log_err "playit API: could not get agent id - check PLAYIT_API_KEY."
+    log_err "playit API: could not get agent id - check the secret key."
     return 0
   }
 
@@ -40,26 +40,38 @@ playit_ensure_tunnels() {
   lan_ip=$(ip route get 1.1.1.1 2>/dev/null | awk '{print $7; exit}')
   lan_ip=${lan_ip:-127.0.0.1}
 
-  local port ports
-  ports=$(mysql -N -B -e "SELECT port FROM pelican.allocations ORDER BY port;" 2>/dev/null || true)
-  for port in $ports; do
-    if ! echo "$PLAYIT_RESP" | jq -e --arg n "pelican-$port" '.tunnels[]? | select(.name == $n)' >/dev/null 2>&1; then
-      log "Creating playit tunnel for port $port..."
-      playit_api POST /v1/tunnels/create \
-        "{\"ports\":{\"type\":\"custom-tcp\",\"details\":$port},\"origin\":{\"type\":\"agent\",\"details\":{\"agent_id\":\"$agent_id\",\"local_ip\":\"$lan_ip\",\"local_port\":$port}},\"enabled\":true,\"name\":\"pelican-$port\"}"
-      if echo "$PLAYIT_RESP" | grep -q '"status":"ok"'; then
-        log "playit tunnel created for $port."
-      else
-        log_err "playit tunnel create failed for $port: $(echo "$PLAYIT_RESP" | head -c 200)"
+  # The agent key is read-only: tunnels are created in the playit dashboard
+  # (https://playit.gg -> Tunnels). This sync only maps existing tunnels to
+  # allocations (matching by local port, fallback by name pelican-<port>).
+  # With a write-capable API key, tunnels are auto-created here instead.
+  if [ -n "${PLAYIT_API_KEY:-}" ]; then
+    local port ports
+    ports=$(mysql -N -B -e "SELECT port FROM pelican.allocations ORDER BY port;" 2>/dev/null || true)
+    for port in $ports; do
+      if ! echo "$PLAYIT_RESP" | jq -e --arg n "pelican-$port" '.tunnels[]? | select(.name == $n)' >/dev/null 2>&1; then
+        log "Creating playit tunnel for port $port..."
+        playit_api POST /tunnels/create \
+          "{\"name\":\"pelican-$port\",\"port_type\":\"tcp\",\"port_count\":1,\"origin\":{\"type\":\"agent\",\"data\":{\"agent_id\":\"$agent_id\",\"local_ip\":\"$lan_ip\",\"local_port\":$port}},\"enabled\":true}"
+        if echo "$PLAYIT_RESP" | grep -q '"status":"success"'; then
+          log "playit tunnel created for $port."
+        else
+          log_err "playit tunnel create failed for $port: $(echo "$PLAYIT_RESP" | head -c 200)"
+        fi
+        sleep 1
       fi
-      sleep 1
-    fi
-  done
+    done
+  fi
 
   playit_api POST /v1/agents/rundata '{}'
   if echo "$PLAYIT_RESP" | jq -e . >/dev/null 2>&1; then
-    echo "$PLAYIT_RESP" | jq -r '.tunnels[]? | select(.name | startswith("pelican-")) | [.name, .display_address] | @tsv' 2>/dev/null \
-      | awk -F'\t' '{gsub("pelican-","",$1); printf "\"%s\":\"%s\"\n", $1, $2}' \
+    echo "$PLAYIT_RESP" | jq -r '
+      .tunnels[]?
+      | select(.port_type == "tcp" or .port_type == "udp")
+      | .agent_config.fields as $f
+      | ($f[] | select(.name == "local_port") | .value) as $port
+      | select($port != null)
+      | [$port, .display_address] | @tsv' 2>/dev/null \
+      | awk -F'\t' '{printf "\"%s\":\"%s\"\n", $1, $2}' \
       | jq -s 'from_entries // {}' > "$PLAYIT_MAP_FILE" 2>/dev/null || true
     chmod 644 "$PLAYIT_MAP_FILE" 2>/dev/null || true
     log "playit tunnel map updated ($PLAYIT_MAP_FILE)."

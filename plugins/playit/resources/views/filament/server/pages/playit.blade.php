@@ -22,8 +22,19 @@
                     </p>
                 @else
                     <p class="text-warning-600 dark:text-warning-400">
-                        No playit tunnel yet — it is created automatically within a few minutes
-                        (the heal system syncs tunnels every 10 minutes).
+                        No playit tunnel for this port yet.
+                    </p>
+                    <x-filament::button
+                        tag="a"
+                        href="https://playit.gg/tunnels"
+                        target="_blank"
+                        size="sm"
+                        class="mt-2">
+                        Create on playit.gg (TCP, local port {{ $row['port'] }})
+                    </x-filament::button>
+                    <p class="text-sm text-gray-500 dark:text-gray-400 mt-2">
+                        After creating it, the address appears here automatically
+                        (sync runs every 10 minutes).
                     </p>
                 @endif
             </x-filament::section>
