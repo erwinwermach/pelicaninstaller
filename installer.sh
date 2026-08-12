@@ -264,6 +264,8 @@ NODE_FQDN="$NODE_SUBDOMAIN.$DOMAIN"
 . "$SCRIPT_DIR/lib/queue.sh"
 # shellcheck source=../lib/plugins.sh
 . "$SCRIPT_DIR/lib/plugins.sh"
+# shellcheck source=../lib/playit.sh
+. "$SCRIPT_DIR/lib/playit.sh"
 
 STAGES_DIR="$PI_ROOT/stages"
 mkdir -p "$STAGES_DIR"
@@ -279,6 +281,7 @@ run_phase nginx-enable nginx_enable_phase
 run_phase heal-install install_heal_system
 run_phase queue queue_phase
 run_phase plugins plugins_phase
+run_phase playit playit_phase
 run_phase firewall ufw_setup
 
 finish_install

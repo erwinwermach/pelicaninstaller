@@ -37,3 +37,9 @@ NODE_CPU=100
 
 # Reboot the server automatically after install (verifies self-healing)
 AUTO_REBOOT=yes
+
+# Optional: playit.gg agent (free game-server tunneling through CGNAT).
+# Get the secret key at https://playit.gg -> Account -> Secret Key.
+# Leave empty to skip. Create TCP tunnels afterwards at
+# https://playit.gg -> Tunnels for each game port.
+PLAYIT_SECRET_KEY=
