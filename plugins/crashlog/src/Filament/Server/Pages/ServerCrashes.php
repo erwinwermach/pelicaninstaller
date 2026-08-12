@@ -18,6 +18,8 @@ class ServerCrashes extends Page
 
     protected static ?int $navigationSort = 7;
 
+    public string $levelFilter = 'all';
+
     public string $detailId = '';
 
     public function getData(): array
@@ -26,10 +28,15 @@ class ServerCrashes extends Page
         $events = $this->readJson('/var/www/pelican/storage/app/crashlog/index-server-' . $uuid . '.json')['events'] ?? [];
 
         $critical = 0;
+        $recent = 0;
         $last = null;
+        $hourAgo = time() - 3600;
         foreach ($events as $e) {
             if (($e['level'] ?? '') === 'critical') {
                 $critical++;
+                if (($e['ts'] ?? 0) > $hourAgo) {
+                    $recent++;
+                }
             }
             if ($last === null || ($e['ts'] ?? 0) > ($last['ts'] ?? 0)) {
                 $last = $e;
@@ -40,6 +47,8 @@ class ServerCrashes extends Page
             'uuid' => $uuid,
             'events' => $events,
             'critical' => $critical,
+            'recent_critical' => $recent,
+            'loop_risk' => $recent >= 3,
             'last' => $last,
         ];
     }
@@ -54,16 +63,7 @@ class ServerCrashes extends Page
         ];
     }
 
-    public function exportAction(string $id): Action
-    {
-        return Action::make('export_' . $id)
-            ->label('Export')
-            ->icon('tabler-download')
-            ->color('gray')
-            ->action(fn () => $this->downloadEvent($id));
-    }
-
-    public function downloadEvent(string $id): StreamedResponse
+    public function download(string $id): StreamedResponse
     {
         return response()->streamDownload(function () use ($id) {
             echo $this->formatEvent($this->getEventDetail($id));

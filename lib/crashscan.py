@@ -15,12 +15,23 @@ EVENTS = os.path.join(BASE, "events")
 STATE = os.path.join(BASE, "state")
 PANEL_LOGS = "/var/www/pelican/storage/logs"
 VOLUMES = "/var/lib/pelican/volumes"
-WINDOW = 480
+WINDOW = int(os.environ.get("CRASHSCAN_WINDOW", "480"))
 RETENTION = 30 * 86400
 MAX_EVENT_FILES = 1200
-CAPS = {"server": 100, "infra": 200, "audit": 400}
+CAPS = {"server": 100, "infra": 200, "audit": 600}
 SERVICES = ["mariadb", "redis-server", "php8.3-fpm", "nginx", "docker", "cloudflared", "pelican-queue", "wings"]
 META_KEYS = ["id", "ts", "iso", "scope", "source", "server", "name", "level", "exit_code", "oom", "issue", "preview"]
+CONSOLE_FILES = [
+    os.path.join("logs", "latest.log"),
+    os.path.join("logs", "server.log"),
+    os.path.join("logs", "console.log"),
+    "server.log",
+    "latest.log",
+    "console.log",
+    "screenlog.0",
+]
+CONSOLE_LINE = re.compile(r"\[(?:ERROR|SEVERE|FATAL)\]|(?:^|\s)(?:ERROR|SEVERE|FATAL|CRITICAL):|panic:|Fatal error|Critical error|OutOfMemoryError|Exception in thread|AssertionError|^Killed$", re.I)
+CONSOLE_TS = re.compile(r"^\[\d{2}:\d{2}:\d{2}\]")
 
 EXIT_HINTS = {
     134: "Exit 134 (SIGABRT) - process aborted.",
@@ -29,27 +40,36 @@ EXIT_HINTS = {
 }
 
 ISSUE_PATTERNS = [
-    (re.compile(r"OutOfMemoryError|Java heap space|heap space", re.I), "Java ran out of heap memory - raise the memory limit or heap size."),
-    (re.compile(r"UnsupportedClassVersionError|class file version \d+", re.I), "Java version mismatch - the server needs a different Java version."),
-    (re.compile(r"Unable to access jarfile|no main manifest attribute|Could not find or load main class", re.I), "Startup jar missing or broken - use the Health page repair."),
-    (re.compile(r"Address already in use|EADDRINUSE|bind: cannot assign", re.I), "Port already in use - another process is holding the server port."),
-    (re.compile(r"Connection refused|ECONNREFUSED", re.I), "A dependency refused the connection (database/broker unreachable)."),
-    (re.compile(r"SIGSEGV|segmentation fault", re.I), "Native crash (segfault) - see the stack trace."),
-    (re.compile(r"panic:", re.I), "Runtime panic - see the stack trace in the excerpt."),
-    (re.compile(r"No space left on device|disk full", re.I), "Disk full - free space on the host."),
-    (re.compile(r"Too many open files", re.I), "File descriptor limit hit (ulimit)."),
-    (re.compile(r"maximum login|Failed to verify username|Moved too quickly", re.I), "Game auth server issue (rate limit or invalid session)."),
-    (re.compile(r"Timed out|connect timed out|Read timed out", re.I), "Network timeout."),
-    (re.compile(r"Killed by the OOM|oom-kill|Out of memory: Killed process", re.I), "OOM killer on the host."),
-    (re.compile(r"cannot open shared object file", re.I), "Missing native library."),
-    (re.compile(r"Unknown flag|invalid argument|Usage:", re.I), "Invalid startup arguments - check the egg startup config."),
-    (re.compile(r"npm ERR|node:internal", re.I), "Node.js crash."),
-    (re.compile(r"Traceback \(most recent call last\)|Fatal Python error", re.I), "Python crash."),
-    (re.compile(r"FatalError|Uncaught Error", re.I), "Fatal runtime error."),
-    (re.compile(r"SQLSTATE|Connection refused \(SQL", re.I), "Database query error."),
-    (re.compile(r"aborted connection|Too many connections", re.I), "Database connection issue."),
-    (re.compile(r"upstream timed out|connect\(\) failed", re.I), "Reverse proxy upstream issue."),
-    (re.compile(r"connection to origin failed|Failed to connect to origin", re.I), "Tunnel connectivity issue."),
+    (re.compile(r"Mod resolution failed|Incompatible mods found|HARD_DEP"), "Mod incompatibility - conflicting or missing mod dependencies (see the resolution details)."),
+    (re.compile(r"requires version \d+ or later of 'OpenJDK[^']*' \(java\)"), "A mod requires a newer Java version than the server runs - update the egg's Java/docker image."),
+    (re.compile(r"requires version \d+ or later"), "A component requires a newer version than provided - version mismatch."),
+    (re.compile(r"java @ \[>="), "A mod/plugin requires a newer Java version."),
+    (re.compile(r"OutOfMemoryError|Java heap space|heap space"), "Java ran out of heap memory - raise the memory limit or heap size."),
+    (re.compile(r"UnsupportedClassVersionError|class file version \d+"), "Java version mismatch - the server needs a different Java version."),
+    (re.compile(r"Unable to access jarfile|no main manifest attribute|Could not find or load main class"), "Startup jar missing or broken - use the Health page repair."),
+    (re.compile(r"Invalid or corrupt jarfile"), "Corrupt server jar - reinstall or repair it."),
+    (re.compile(r"ClassNotFoundException"), "Missing class/library - the server files are incomplete."),
+    (re.compile(r"Could not reserve enough space for object heap|Invalid maximum heap size"), "Heap size misconfigured - lower -Xmx or free memory on the host."),
+    (re.compile(r"Address already in use|EADDRINUSE|bind: cannot assign|Failed to bind"), "Port already in use - another process is holding the server port."),
+    (re.compile(r"Connection refused|ECONNREFUSED"), "A dependency refused the connection (database/broker unreachable)."),
+    (re.compile(r"SIGSEGV|segmentation fault"), "Native crash (segfault) - see the stack trace."),
+    (re.compile(r"panic:"), "Runtime panic - see the stack trace in the excerpt."),
+    (re.compile(r"No space left on device|disk full"), "Disk full - free space on the host."),
+    (re.compile(r"Too many open files"), "File descriptor limit hit (ulimit)."),
+    (re.compile(r"Permission denied"), "Permission denied - file ownership/permissions issue."),
+    (re.compile(r"FileNotFoundException|No such file or directory"), "Missing file or directory - check the server paths."),
+    (re.compile(r"maximum login|Failed to verify username|Moved too quickly"), "Game auth server issue (rate limit or invalid session)."),
+    (re.compile(r"Timed out|connect timed out|Read timed out"), "Network timeout."),
+    (re.compile(r"Killed by the OOM|oom-kill|Out of memory: Killed process"), "OOM killer on the host."),
+    (re.compile(r"cannot open shared object file"), "Missing native library."),
+    (re.compile(r"Unknown flag|invalid argument|Usage:"), "Invalid startup arguments - check the egg startup config."),
+    (re.compile(r"npm ERR|node:internal"), "Node.js crash."),
+    (re.compile(r"Traceback \(most recent call last\)|Fatal Python error"), "Python crash."),
+    (re.compile(r"FatalError|Uncaught Error"), "Fatal runtime error."),
+    (re.compile(r"SQLSTATE|Connection refused \(SQL"), "Database query error."),
+    (re.compile(r"aborted connection|Too many connections"), "Database connection issue."),
+    (re.compile(r"upstream timed out|connect\(\) failed"), "Reverse proxy upstream issue."),
+    (re.compile(r"connection to origin failed|Failed to connect to origin"), "Tunnel connectivity issue."),
 ]
 
 
@@ -164,12 +184,26 @@ def index_add(path, meta, cap, now_ts):
     save_json(path, idx)
 
 
+def emit(ev, now_ts):
+    store_event(ev)
+    meta = {k: ev[k] for k in META_KEYS if k in ev}
+    if ev["scope"] == "server" and ev.get("server"):
+        index_add(os.path.join(BASE, "index-server-%s.json" % ev["server"]), meta, CAPS["server"], now_ts)
+    else:
+        index_add(os.path.join(BASE, "index-infra.json"), meta, CAPS["infra"], now_ts)
+    index_add(os.path.join(BASE, "audit.json"), meta, CAPS["audit"], now_ts)
+
+
 def loop_check(ev, now_ts):
     idx = load_json(os.path.join(BASE, "index-server-%s.json" % ev["server"]))
     recent = [e for e in idx.get("events", []) if e.get("ts", 0) > now_ts - 3600]
     if len(recent) >= 2:
         ev["level"] = "critical"
         ev["issue"] = "Crash loop - %d crashes within the last hour. %s" % (len(recent) + 1, ev["issue"] or "")
+
+
+def server_index(uuid):
+    return load_json(os.path.join(BASE, "index-server-%s.json" % uuid))
 
 
 def scan_containers(servers, state):
@@ -201,7 +235,9 @@ def scan_containers(servers, state):
         elif status == "running" and rc > prev.get("rc", 0):
             crashed = True
             kind = "restart"
-        state[uuid] = {"fin": fin, "rc": rc}
+        if fin > 0:
+            prev["fin"] = max(prev.get("fin", 0), fin)
+        state[uuid] = {"fin": prev.get("fin", 0), "rc": rc}
         if not crashed:
             continue
         logs = run(["docker", "logs", "--tail", "100", uuid])
@@ -224,6 +260,41 @@ def scan_containers(servers, state):
         ev = make_event("server", "container", level, ts, issue, logs, server=uuid, name=name, exit_code=exit_code, oom=oom)
         loop_check(ev, ts)
         events.append(ev)
+    return events
+
+
+def scan_wings_crashes(state, servers, now_ts):
+    events = []
+    out = run(["journalctl", "-u", "wings", "--since", "%d seconds ago" % WINDOW, "-o", "json", "--no-pager"])
+    if not out:
+        return events
+    cursor = state.get("wings_crash", 0)
+    max_ts = cursor
+    for line in out.splitlines():
+        try:
+            obj = json.loads(line)
+        except ValueError:
+            continue
+        ts = int(float(obj.get("__REALTIME_TIMESTAMP", 0)) / 1000000)
+        if ts <= cursor:
+            continue
+        msg = (obj.get("MESSAGE") or "")
+        if not re.search(r"entering a crashed state|crash handler", msg):
+            continue
+        m = re.search(r"server=([0-9a-f-]{36})", msg)
+        if not m or m.group(1) not in servers:
+            continue
+        uuid = m.group(1)
+        max_ts = max(max_ts, ts)
+        idx = server_index(uuid)
+        if any(e.get("source") == "container" and abs(e.get("ts", 0) - ts) < 600 for e in idx.get("events", [])):
+            continue
+        logs = run(["docker", "logs", "--tail", "60", uuid])
+        issue = first_issue(logs) or "Crashed - detected by the daemon crash handler."
+        ev = make_event("server", "wings-crash", "critical", ts, issue, logs, server=uuid, name=servers[uuid])
+        loop_check(ev, ts)
+        events.append(ev)
+    state["wings_crash"] = max_ts
     return events
 
 
@@ -360,6 +431,64 @@ def scan_volumes(servers):
     return events
 
 
+def scan_consoles(servers, state, now_ts):
+    events = []
+    seen = {k: v for k, v in state.get("_seen", {}).items() if v > now_ts - 86400}
+    for uuid, name in servers.items():
+        idx = server_index(uuid)
+        recent = [e for e in idx.get("events", []) if e.get("ts", 0) > now_ts - 600]
+        if recent:
+            continue
+        vol = os.path.join(VOLUMES, uuid)
+        if not os.path.isdir(vol):
+            continue
+        entry = state.get(uuid, {})
+        for rel in CONSOLE_FILES:
+            path = os.path.join(vol, rel)
+            if not os.path.isfile(path):
+                continue
+            try:
+                size = os.path.getsize(path)
+            except OSError:
+                continue
+            offset = entry.get(rel)
+            if offset is None:
+                offset = max(0, size - 262144)
+            if offset > size:
+                offset = 0
+            if offset >= size:
+                entry[rel] = size
+                continue
+            try:
+                with open(path, "rb") as fh:
+                    fh.seek(offset)
+                    data = fh.read(1572864)
+            except OSError:
+                continue
+            new_offset = offset + len(data)
+            chunk = data.decode("utf-8", "replace")
+            lines = chunk.split("\n")
+            i = 0
+            while i < len(lines):
+                if not CONSOLE_LINE.search(lines[i]):
+                    i += 1
+                    continue
+                block = [lines[i]]
+                i += 1
+                while i < len(lines) and len(block) < 40 and not CONSOLE_LINE.search(lines[i]) and not CONSOLE_TS.match(lines[i]) and not lines[i].startswith("#"):
+                    block.append(lines[i])
+                    i += 1
+                text = "\n".join(block)
+                if seen_recently(seen, text, now_ts):
+                    continue
+                level = "critical" if re.search(r"FATAL|SEVERE|panic:|OutOfMemory|Fatal error", text, re.I) else "error"
+                events.append(make_event("server", "console", level, now_ts, first_issue(text), text[:12000], server=uuid, name=name))
+            entry[rel] = new_offset
+        state[uuid] = entry
+    state["_seen"] = seen
+    return events
+
+
 def prune():
     cutoff = time.time() - RETENTION
     keep = []
@@ -401,30 +530,30 @@ def main():
         if len(parts) >= 2 and parts[0]:
             servers[parts[0]] = parts[1]
 
-    new_events = []
-
     cs = load_json(os.path.join(STATE, "containers.json"))
-    new_events += scan_containers(servers, cs)
+    for ev in scan_containers(servers, cs):
+        emit(ev, now_ts)
     save_json(os.path.join(STATE, "containers.json"), cs)
 
     js = load_json(os.path.join(STATE, "journals.json"))
-    new_events += scan_journals(js)
+    for ev in scan_wings_crashes(js, servers, now_ts):
+        emit(ev, now_ts)
+    for ev in scan_journals(js):
+        emit(ev, now_ts)
     save_json(os.path.join(STATE, "journals.json"), js)
 
     ls = load_json(os.path.join(STATE, "logs.json"))
-    new_events += scan_panel_logs(ls)
+    for ev in scan_panel_logs(ls):
+        emit(ev, now_ts)
     save_json(os.path.join(STATE, "logs.json"), ls)
 
-    new_events += scan_volumes(servers)
+    for ev in scan_volumes(servers):
+        emit(ev, now_ts)
 
-    for ev in new_events:
-        store_event(ev)
-        meta = {k: ev[k] for k in META_KEYS if k in ev}
-        if ev["scope"] == "server" and ev.get("server"):
-            index_add(os.path.join(BASE, "index-server-%s.json" % ev["server"]), meta, CAPS["server"], now_ts)
-        else:
-            index_add(os.path.join(BASE, "index-infra.json"), meta, CAPS["infra"], now_ts)
-        index_add(os.path.join(BASE, "audit.json"), meta, CAPS["audit"], now_ts)
+    cs2 = load_json(os.path.join(STATE, "consoles.json"))
+    for ev in scan_consoles(servers, cs2, now_ts):
+        emit(ev, now_ts)
+    save_json(os.path.join(STATE, "consoles.json"), cs2)
 
     prune()
 
@@ -435,11 +564,11 @@ def main():
 
     save_json(os.path.join(BASE, "meta.json"), {
         "last_scan": datetime.now(timezone.utc).isoformat(),
-        "scanned": len(new_events),
+        "scanned": now_ts,
         "stored": total,
     })
 
-    log("servers=%d new_events=%d stored=%d" % (len(servers), len(new_events), total))
+    log("servers=%d stored=%d window=%d" % (len(servers), total, WINDOW))
 
 
 if __name__ == "__main__":

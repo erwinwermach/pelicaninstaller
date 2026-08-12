@@ -17,7 +17,9 @@ class CrashDashboard extends Page
 
     protected static ?int $navigationSort = 2;
 
-    public string $filter = 'all';
+    public string $scopeFilter = 'all';
+
+    public string $levelFilter = 'all';
 
     public string $detailId = '';
 
@@ -45,6 +47,7 @@ class CrashDashboard extends Page
         return [
             'audit' => $audit,
             'meta' => $meta,
+            'last' => $audit[0] ?? null,
             'stats' => [
                 'total' => count($audit),
                 'critical' => $critical,
@@ -64,16 +67,7 @@ class CrashDashboard extends Page
         ];
     }
 
-    public function exportAction(string $id): Action
-    {
-        return Action::make('export_' . $id)
-            ->label('Export')
-            ->icon('tabler-download')
-            ->color('gray')
-            ->action(fn () => $this->downloadEvent($id));
-    }
-
-    public function downloadEvent(string $id): StreamedResponse
+    public function download(string $id): StreamedResponse
     {
         return response()->streamDownload(function () use ($id) {
             echo $this->formatEvent($this->getEventDetail($id));
@@ -85,7 +79,7 @@ class CrashDashboard extends Page
         return response()->streamDownload(function () {
             $audit = $this->readJson('/var/www/pelican/storage/app/crashlog/audit.json')['events'] ?? [];
             $count = 0;
-            foreach (array_slice($audit, 0, 200) as $e) {
+            foreach (array_slice($audit, 0, 500) as $e) {
                 if ($count > 0) {
                     echo "\n\n";
                 }
