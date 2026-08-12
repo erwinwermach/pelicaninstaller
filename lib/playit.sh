@@ -43,15 +43,25 @@ playit_ensure_tunnels() {
   # The agent key is read-only: tunnels are created in the playit dashboard
   # (https://playit.gg -> Tunnels). This sync only maps existing tunnels to
   # allocations (matching by local port, fallback by name pelican-<port>).
-  # With a write-capable API key, tunnels are auto-created here instead.
+  # With a write-capable API key, tunnels are auto-created here instead,
+  # auto-detecting the account tier (free vs premium).
   if [ -n "${PLAYIT_API_KEY:-}" ]; then
+    local has_premium ttype
+    has_premium=$(echo "$PLAYIT_RESP" | jq -r '.data.permissions.has_premium // false' 2>/dev/null)
+    if [ "$has_premium" = "true" ]; then
+      ttype="custom-tcp"
+      log "playit account: premium - using custom TCP tunnels."
+    else
+      ttype="minecraft-java"
+      log "playit account: free - using minecraft-java tunnels (custom TCP needs premium)."
+    fi
     local port ports
     ports=$(mysql -N -B -e "SELECT port FROM pelican.allocations ORDER BY port;" 2>/dev/null || true)
     for port in $ports; do
-      if ! echo "$PLAYIT_RESP" | jq -e --arg n "pelican-$port" '.tunnels[]? | select(.name == $n)' >/dev/null 2>&1; then
+      if ! echo "$PLAYIT_RESP" | jq -e --arg n "pelican-$port" '.data.tunnels[]? | select(.name == $n)' >/dev/null 2>&1; then
         log "Creating playit tunnel for port $port..."
         playit_api POST /tunnels/create \
-          "{\"name\":\"pelican-$port\",\"port_type\":\"tcp\",\"port_count\":1,\"origin\":{\"type\":\"agent\",\"data\":{\"agent_id\":\"$agent_id\",\"local_ip\":\"$lan_ip\",\"local_port\":$port}},\"enabled\":true}"
+          "{\"name\":\"pelican-$port\",\"tunnel_type\":\"$ttype\",\"port_type\":\"tcp\",\"port_count\":1,\"origin\":{\"type\":\"agent\",\"data\":{\"agent_id\":\"$agent_id\",\"local_ip\":\"$lan_ip\",\"local_port\":$port}},\"enabled\":true}"
         if echo "$PLAYIT_RESP" | grep -q '"status":"success"'; then
           log "playit tunnel created for $port."
         else
@@ -73,6 +83,8 @@ playit_ensure_tunnels() {
        | {key: $port, value: .display_address}]
       | from_entries' 2>/dev/null > "$PLAYIT_MAP_FILE" || true
     chmod 644 "$PLAYIT_MAP_FILE" 2>/dev/null || true
+    echo "$PLAYIT_RESP" | jq -r '{has_premium: .data.permissions.has_premium, account_status: .data.permissions.account_status, agent_id: .data.agent_id}' 2>/dev/null > "$PI_ROOT/playit-status.json" || true
+    chmod 644 "$PI_ROOT/playit-status.json" 2>/dev/null || true
     log "playit tunnel map updated ($PLAYIT_MAP_FILE)."
   fi
 }

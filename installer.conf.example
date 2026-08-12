@@ -48,3 +48,9 @@ PLAYIT_SECRET_KEY=
 
 # Alternative: a playit.gg API key (Account -> API keys) if you have one.
 PLAYIT_API_KEY=
+
+# Route HTTP apps (Python/JS/Node/Discord bots, web servers) through the
+# Cloudflare tunnel on app-<port>.<domain> hostnames. Only works for
+# Cloudflare-supported HTTP ports (80/443/8080/8443/2052-2087/2095-2096).
+# Game/TCP ports are not routable through the tunnel - use playit for those.
+CF_APP_ROUTING=no

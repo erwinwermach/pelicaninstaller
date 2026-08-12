@@ -168,6 +168,22 @@ public_ip() {
   echo "$ip"
 }
 
+cf_app_port_supported() {
+  case "$1" in
+    80|443|2052|2053|2082|2083|2086|2087|2095|2096|8080|8443) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+cf_app_hostnames() {
+  local port
+  for port in $(expand_ports "${GAME_PORTS:-25565-25575}"); do
+    if cf_app_port_supported "$port"; then
+      echo "app-$port.$DOMAIN"
+    fi
+  done
+}
+
 cf_config_content() {
   {
     echo "tunnel: $CF_TUNNEL_ID"
@@ -180,6 +196,15 @@ cf_config_content() {
     echo "      noTLSVerify: true"
     echo "  - hostname: $NODE_FQDN"
     echo "    service: http://127.0.0.1:8080"
+    if [ "${CF_APP_ROUTING:-no}" = "yes" ]; then
+      local port
+      for port in $(expand_ports "${GAME_PORTS:-25565-25575}"); do
+        if cf_app_port_supported "$port"; then
+          echo "  - hostname: app-$port.$DOMAIN"
+          echo "    service: http://127.0.0.1:$port"
+        fi
+      done
+    fi
     echo "  - service: http_status:404"
   } > "$1"
 }
@@ -211,6 +236,13 @@ cf_ensure_dns() {
 
   cf_dns_ensure CNAME "$PANEL_FQDN" "$CF_ORIGIN_TARGET" true
   cf_dns_ensure CNAME "$NODE_FQDN" "$CF_ORIGIN_TARGET" true
+
+  if [ "${CF_APP_ROUTING:-no}" = "yes" ]; then
+    local app
+    for app in $(cf_app_hostnames); do
+      cf_dns_ensure CNAME "$app" "$CF_ORIGIN_TARGET" true
+    done
+  fi
 
   local pub port
   pub=$(public_ip)
