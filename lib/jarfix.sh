@@ -10,6 +10,36 @@ fabric_installer_ensure() {
   fi
 }
 
+game_jar_download() {
+  local srvdir=$1 mc=$2
+  command -v curl >/dev/null 2>&1 || return 1
+  command -v python3 >/dev/null 2>&1 || return 1
+  local jar_url
+  jar_url=$(curl -fsSL -m 30 "https://launchermeta.mojang.com/mc/game/version_manifest_v2.json" 2>/dev/null | python3 -c "
+import sys, json, urllib.request
+mc = '$mc'
+try:
+    d = json.load(sys.stdin)
+    for v in d['versions']:
+        if v['id'] == mc:
+            vd = json.load(urllib.request.urlopen(v['url']))
+            print(vd['downloads']['server']['url'])
+            break
+except Exception:
+    pass
+")
+  [ -n "$jar_url" ] || return 1
+  if curl -fsSL -m 300 -o "$srvdir/minecraft-server.jar.tmp" "$jar_url" 2>/dev/null && [ "$(stat -c %s "$srvdir/minecraft-server.jar.tmp" 2>/dev/null || echo 0)" -gt 1000000 ]; then
+    rm -f "$srvdir/minecraft-server.jar" "$srvdir/server.jar"
+    mv "$srvdir/minecraft-server.jar.tmp" "$srvdir/minecraft-server.jar"
+    ln -sfn minecraft-server.jar "$srvdir/server.jar"
+    chown -h pelican:pelican "$srvdir/server.jar" 2>/dev/null || true
+    return 0
+  fi
+  rm -f "$srvdir/minecraft-server.jar.tmp" 2>/dev/null
+  return 1
+}
+
 server_var() {
   mysql -N -B -e "SELECT sv.variable_value FROM pelican.egg_variables ev JOIN pelican.server_variables sv ON sv.variable_id=ev.id JOIN pelican.servers s ON s.id=sv.server_id WHERE s.uuid='$1' AND ev.env_variable='$2';" 2>/dev/null | head -1
 }
@@ -106,17 +136,21 @@ server_jars_fix() {
           if [ -n "$launch_jar" ]; then
             rm -f "$srvdir/$launch_jar"
             cp -f "$stage/$launch_jar" "$srvdir/$launch_jar"
-            game_jar=$(find "$stage/versions" -name 'server-*.jar' -size +100k 2>/dev/null | head -1)
-            if [ -n "$game_jar" ]; then
-              cp -f "$game_jar" "$srvdir/minecraft-server.jar"
-              if [ ! -e "$srvdir/server.jar" ] || [ "$(stat -c %s "$srvdir/server.jar" 2>/dev/null || echo 0)" -lt 100000 ]; then
-                ln -sfn minecraft-server.jar "$srvdir/server.jar"
-                chown -h pelican:pelican "$srvdir/server.jar" 2>/dev/null || true
-                fixed=true
-              fi
-            fi
             cp -rn "$stage/libraries/." "$srvdir/libraries/" 2>/dev/null || true
             cp -rn "$stage/versions/." "$srvdir/versions/" 2>/dev/null || true
+            if game_jar_download "$srvdir" "$mc"; then
+              log "Server $uuid: downloaded official game jar (bundles all game libraries)."
+            else
+              game_jar=$(find "$stage/versions" -name 'server-*.jar' -size +100k 2>/dev/null | head -1)
+              if [ -n "$game_jar" ]; then
+                cp -f "$game_jar" "$srvdir/minecraft-server.jar"
+                if [ ! -e "$srvdir/server.jar" ]; then
+                  ln -sfn minecraft-server.jar "$srvdir/server.jar"
+                  chown -h pelican:pelican "$srvdir/server.jar" 2>/dev/null || true
+                fi
+              fi
+              log_err "Server $uuid: could not download official game jar - game libraries may be missing."
+            fi
             chown -R pelican:pelican "$srvdir/$launch_jar" "$srvdir/minecraft-server.jar" "$srvdir/libraries" "$srvdir/versions" 2>/dev/null || true
 
             mysql -e "UPDATE pelican.server_variables sv JOIN pelican.egg_variables ev ON ev.id=sv.variable_id SET sv.variable_value='$launch_jar' WHERE ev.env_variable='SERVER_JARFILE' AND sv.server_id=(SELECT id FROM pelican.servers WHERE uuid='$uuid');" 2>/dev/null || true
