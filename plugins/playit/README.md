@@ -1,34 +1,31 @@
-# Playit plugin (skeleton, WIP)
+# Playit plugin
 
 Shows playit.gg tunnel addresses in the Pelican server panel and automates
 tunnel creation for allocations.
 
 ## Status
 - **Agent**: deployed on the server as `playit-agent` docker container
-  (`docker run -d --restart unless-stopped --net=host -e SECRET_KEY=...`).
-  Connected + account verified.
-- **Tunnels**: created manually in the playit.gg dashboard (see below) until
-  the API integration is finished.
-- **Plugin**: skeleton only. Next steps:
-  1. Settings page (`HasPluginSettings` + `EnvironmentWriterTrait`)
-     for `PLAYIT_API_KEY` (https://playit.gg -> Account -> API keys).
-  2. Fetch tunnels from the playit API; map allocation port -> public address.
-  3. Server-panel widget showing the address (register via
-     `Console::registerCustomWidgets` or a server page).
-  4. Admin action "create playit tunnel" for a node's allocations.
-  5. Build zip, host, add to `lib/plugins.sh` PLUGIN_LIST.
+  (docker restart policy, host networking, secret key in env). Connected + verified.
+- **Tunnels (auto)**: when `PLAYIT_API_KEY` is configured, the installer/heal
+  calls the playit API (`POST https://api.playit.gg/v1/...`):
+  - `/v1/agents/rundata` -> agent id + existing tunnels
+  - `/v1/tunnels/create` -> one TCP tunnel per allocation, named `pelican-<port>`
+  - writes `port -> display_address` to
+    `/etc/pelican-installer/playit-tunnels.json` (chmod 644, read by the panel)
+- **Plugin**: server-panel "Playit" page listing each allocation's public join
+  address (reads the map file). Plugin settings (`HasPluginSettings`) store
+  `PLAYIT_API_KEY` in `.env`.
+- Free tier = TCP (Minecraft Java works). UDP needs playit premium - the
+  create call uses `custom-tcp`; premium can switch to `custom-both` per tunnel.
 
-## Manual tunnel setup (do this now)
-1. https://playit.gg -> sign in -> **Manage** (or Tunnels).
+## Manual tunnel setup (fallback, no API key)
+1. https://playit.gg -> sign in -> **Tunnels**
 2. **New Tunnel** -> TCP -> Local address `192.168.10.41`, port `25565`
    (repeat for 25566..25575 as needed).
-3. playit gives each tunnel a public address like `xxxx.playit.gg:NNNNN`.
-4. Players join that address in Minecraft.
-
-Note: playit free tier = TCP (Minecraft Java works). UDP needs premium.
+3. Players join the assigned `xxxx.playit.gg:NNNNN` address.
 
 ## Agent reference
 - Image: `ghcr.io/playit-cloud/playit-agent:1.0`
-- Secret key: stored in the container env (`SECRET_KEY`).
-- Local socket: `/run/playit/playitd.sock` (inside container, host network).
+- Secret key: container env `SECRET_KEY`.
 - Logs: `docker logs playit-agent`
+- API base: `https://api.playit.gg`, auth `Authorization: Bearer <api key>`.

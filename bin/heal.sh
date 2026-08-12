@@ -69,6 +69,15 @@ fi
 . "$HEAL_DIR/lib/node.sh"
 ensure_node
 
+# shellcheck source=../lib/playit.sh
+. "$HEAL_DIR/lib/playit.sh"
+if [ -f "$NODE_ATTEMPT_FILE" ] && [ -f "$PELICAN_ETC/config.yml" ]; then
+  if [ ! -f "$PI_ROOT/.playit-synced" ] || [ $(($(date +%s) - $(stat -c %Y "$PI_ROOT/.playit-synced" 2>/dev/null || echo 0))) -gt 600 ]; then
+    playit_ensure_tunnels
+    touch "$PI_ROOT/.playit-synced" 2>/dev/null || true
+  fi
+fi
+
 disk_used=$(df -Pk / | awk 'NR==2 {gsub(/%/,"",$5); print $5}')
 if [ "${disk_used:-0}" -gt 85 ]; then
   hlog "WARNING: disk usage at ${disk_used}%"

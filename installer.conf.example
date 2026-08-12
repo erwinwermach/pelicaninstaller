@@ -43,3 +43,10 @@ AUTO_REBOOT=yes
 # Leave empty to skip. Create TCP tunnels afterwards at
 # https://playit.gg -> Tunnels for each game port.
 PLAYIT_SECRET_KEY=
+
+# Optional: playit.gg API key (https://playit.gg -> Account -> API keys).
+# When set, the installer/heal automatically creates one playit tunnel per
+# allocation (named pelican-<port>) and writes the public addresses to
+# /etc/pelican-installer/playit-tunnels.json, which the panel plugin shows
+# on each server's page instead of the raw IP.
+PLAYIT_API_KEY=
