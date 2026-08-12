@@ -83,6 +83,10 @@ fi
 process_repair_requests
 server_jars_fix
 
+# shellcheck source=../lib/crashscan.sh
+. "$HEAL_DIR/lib/crashscan.sh"
+crash_scan
+
 write_health_json() {
   local disk_used
   disk_used=$(df -Pk / | awk 'NR==2 {gsub(/%/,"",$5); print $5}')
