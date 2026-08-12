@@ -315,7 +315,8 @@ def scan_panel_logs(state):
                 block.append(lines[i])
                 i += 1
             text = "\n".join(block)
-            if seen_recently(seen, text, now_ts):
+            dedupe_text = re.sub(r"^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\]\s*", "", text)
+            if seen_recently(seen, dedupe_text, now_ts):
                 continue
             issue = first_issue(text) or "Panel error - see the excerpt."
             events.append(make_event("panel", "panel", level, ts, issue, text[:12000]))
