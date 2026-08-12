@@ -237,6 +237,8 @@ def scan_journals(state):
         entry = state.get(svc)
         if isinstance(entry, int):
             entry = {"last": entry, "seen": {}}
+        if not isinstance(entry, dict):
+            entry = {"last": 0, "seen": {}}
         last = entry.get("last", 0)
         seen = {k: v for k, v in entry.get("seen", {}).items() if v > now_ts - 86400}
         max_ts = last
