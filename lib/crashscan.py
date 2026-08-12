@@ -102,6 +102,28 @@ def first_issue(text):
     return None
 
 
+def exit_hint(code):
+    if code in EXIT_HINTS:
+        return EXIT_HINTS[code]
+    if code == 1:
+        return "Exited with code 1 - startup or runtime error; check the excerpt."
+    if code != 0:
+        return "Exited with code %d - see the excerpt." % code
+    return None
+
+
+def content_key(text):
+    return hashlib.md5((text or "").encode("utf-8", "replace")).hexdigest()[:16]
+
+
+def seen_recently(seen, text, now_ts, window=21600):
+    key = content_key(text)
+    if seen.get(key, 0) > now_ts - window:
+        return True
+    seen[key] = now_ts
+    return False
+
+
 def make_event(scope, source, level, ts, issue, excerpt, server=None, name=None, exit_code=None, oom=None):
     preview = re.sub(r"\s+", " ", (excerpt or "")[:300]).strip()
     return {
@@ -190,7 +212,7 @@ def scan_containers(servers, state):
         ts = int(time.time())
         if kind == "exit":
             level = "critical" if oom or exit_code in EXIT_HINTS else "error"
-            issue = EXIT_HINTS.get(exit_code)
+            issue = exit_hint(exit_code)
             if oom and exit_code != 137:
                 issue = "Container was OOM-killed - it hit its memory limit."
             if fin > 0:
@@ -207,11 +229,16 @@ def scan_containers(servers, state):
 
 def scan_journals(state):
     events = []
+    now_ts = int(time.time())
     for svc in SERVICES:
         out = run(["journalctl", "-u", svc, "--since", "%d seconds ago" % WINDOW, "-p", "warning", "-o", "json", "--no-pager"])
         if not out:
             continue
-        last = state.get(svc, 0)
+        entry = state.get(svc)
+        if isinstance(entry, int):
+            entry = {"last": entry, "seen": {}}
+        last = entry.get("last", 0)
+        seen = {k: v for k, v in entry.get("seen", {}).items() if v > now_ts - 86400}
         max_ts = last
         for line in out.splitlines():
             try:
@@ -228,15 +255,18 @@ def scan_journals(state):
                 continue
             if svc == "wings" and re.search(r"entering a crashed state|crash handler", msg):
                 continue
+            if seen_recently(seen, msg, now_ts):
+                continue
             level = "critical" if prio <= 2 else ("error" if prio == 3 else "warning")
             scope = "wings" if svc == "wings" else "service"
             events.append(make_event(scope, svc, level, ts, first_issue(msg), msg[:12000]))
-        state[svc] = max_ts
+        state[svc] = {"last": max_ts, "seen": seen}
     return events
 
 
 def scan_panel_logs(state):
     events = []
+    now_ts = int(time.time())
     header = re.compile(r"^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\] production\.(ERROR|CRITICAL|ALERT|EMERGENCY):")
     try:
         files = sorted(glob.glob(os.path.join(PANEL_LOGS, "laravel*.log")))
@@ -250,12 +280,13 @@ def scan_panel_logs(state):
         key = hashlib.md5(path.encode()).hexdigest()[:16]
         prev = state.get(key, {})
         offset = prev.get("offset")
+        seen = {k: v for k, v in prev.get("seen", {}).items() if v > now_ts - 86400}
         if offset is None:
             offset = max(0, size - 1048576)
         if offset > size:
             offset = 0
         if offset >= size:
-            state[key] = {"path": path, "offset": size}
+            state[key] = {"path": path, "offset": size, "seen": seen}
             continue
         try:
             with open(path, "rb") as fh:
@@ -282,9 +313,11 @@ def scan_panel_logs(state):
                 block.append(lines[i])
                 i += 1
             text = "\n".join(block)
+            if seen_recently(seen, text, now_ts):
+                continue
             issue = first_issue(text) or "Panel error - see the excerpt."
             events.append(make_event("panel", "panel", level, ts, issue, text[:12000]))
-        state[key] = {"path": path, "offset": new_offset}
+        state[key] = {"path": path, "offset": new_offset, "seen": seen}
     return events
 
 

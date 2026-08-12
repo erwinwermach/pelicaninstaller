@@ -11,3 +11,5 @@ Thumbs.db
 
 # local logs
 *.log
+
+__pycache__/

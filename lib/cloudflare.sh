@@ -352,13 +352,13 @@ cf_ensure_service() {
 Description=Cloudflare Tunnel Agent (Pelican)
 After=network-online.target
 Wants=network-online.target
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
 ExecStart=$CF_BIN tunnel --config $CF_CFG_FILE run
 Restart=always
 RestartSec=5s
-StartLimitIntervalSec=0
 
 [Install]
 WantedBy=multi-user.target
