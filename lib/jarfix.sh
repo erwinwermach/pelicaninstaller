@@ -2,7 +2,7 @@ FABRIC_INSTALLER_JAR=/var/lib/pelican/fabric-installer.jar
 JAR_REPORT_FILE="/var/www/pelican/storage/app/pelican-jars.json"
 
 fabric_installer_ensure() {
-  if [ ! -f "$FABRIC_INSTALLER_JAR" ] || [ "$(stat -c %s "$FABRIC_INSTALLER_JAR" 2>/dev/null || echo 0)" -lt 100000 ]; then
+  if [ ! -f "$FABRIC_INSTALLER_JAR" ] || [ "$(stat -c %s "$FABRIC_INSTALLER_JAR" 2>/dev/null || echo 0)" -lt 500000 ]; then
     mkdir -p /var/lib/pelican
     curl -fsSL -m 120 -o "$FABRIC_INSTALLER_JAR.tmp" \
       "https://maven.fabricmc.net/net/fabricmc/fabric-installer/1.1.2/fabric-installer-1.1.2.jar" 2>/dev/null || return 1
@@ -42,7 +42,7 @@ server_jars_fix() {
       elif [ -f "$srvdir/server.jar" ] && [ "$(stat -c %s "$srvdir/server.jar" 2>/dev/null || echo 0)" -gt 100000 ]; then
         game_jar=server.jar
       fi
-      if [ "$launch_size" -lt 200000 ] && [ -n "$game_jar" ]; then
+      if [ ! -L "$srvdir/fabric-server-launch.jar" ] && [ "$launch_size" -lt 200000 ] && [ -n "$game_jar" ]; then
         if [ "$jarfile" != "fabric-server-launch.jar" ]; then
           mysql -e "UPDATE pelican.server_variables sv JOIN pelican.egg_variables ev ON ev.id=sv.variable_id SET sv.variable_value='fabric-server-launch.jar' WHERE ev.env_variable='SERVER_JARFILE' AND sv.server_id=(SELECT id FROM pelican.servers WHERE uuid='$uuid');" 2>/dev/null || true
           fixed=true
