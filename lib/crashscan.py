@@ -249,9 +249,10 @@ def scan_containers(servers, state):
         ts = int(time.time())
         if kind == "exit":
             level = "critical" if oom or exit_code in EXIT_HINTS else "error"
-            issue = exit_hint(exit_code)
             if oom and exit_code != 137:
                 issue = "Container was OOM-killed - it hit its memory limit."
+            else:
+                issue = first_issue(logs) or exit_hint(exit_code)
             if fin > 0:
                 ts = fin
         else:
