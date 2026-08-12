@@ -74,13 +74,26 @@
                     @if($row['cf_hostname'])
                         <div class="border-t pt-3">
                             <p class="text-sm text-gray-500 dark:text-gray-400">
-                                Cloudflare (HTTP apps — Python/JS/Node/Discord bots, webhooks)
+                                Cloudflare (HTTP apps — Python/JS/Node/Discord bots, web servers)
                             </p>
-                            <p class="font-semibold">{{ $row['cf_hostname'] }}</p>
-                            <p class="text-sm text-gray-500 dark:text-gray-400">
-                                Served through the tunnel when the app listens on this port
-                                (CF_APP_ROUTING=yes in the installer config).
-                            </p>
+                            @if($row['cf_active'])
+                                <p class="font-semibold text-success-600 dark:text-success-400">
+                                    {{ $row['cf_hostname'] }} — active
+                                </p>
+                                <p class="text-sm text-gray-500 dark:text-gray-400">
+                                    Served through the tunnel. HTTP only (Cloudflare forwards HTTP ports only).
+                                </p>
+                            @else
+                                <p class="font-semibold text-gray-500 dark:text-gray-400">
+                                    {{ $row['cf_hostname'] }}
+                                </p>
+                                <p class="text-sm text-gray-500 dark:text-gray-400">
+                                    Available for HTTP apps — enable it by setting
+                                    <code>CF_APP_ROUTING=yes</code> in
+                                    /etc/pelican-installer/installer.conf and re-running
+                                    <code>sudo bash /opt/pelican-installer/installer.sh</code>.
+                                </p>
+                            @endif
                         </div>
                     @endif
                 </div>

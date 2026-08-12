@@ -15,8 +15,9 @@ class Playit extends Page
     public function getAddressRows(): array
     {
         $server = Filament::getTenant();
-        $map = $this->readJson(config('playit.tunnels_file'));
-        $status = $this->readJson(config('playit.status_file'));
+        $map = $this->readJson(config('playit.tunnels_file', '/etc/pelican-installer/playit-tunnels.json'));
+        $status = $this->readJson(config('playit.status_file', '/etc/pelican-installer/playit-status.json'));
+        $cfEnabled = $this->cfAppRouting();
 
         $rows = [];
         foreach ($server->allocations as $allocation) {
@@ -25,6 +26,7 @@ class Playit extends Page
                 'port' => $allocation->port,
                 'playit_address' => $map[(string) $allocation->port] ?? null,
                 'cf_hostname' => $this->isCfPort($port) ? "app-$port." . $this->domain() : null,
+                'cf_active' => $cfEnabled && $this->isCfPort($port),
             ];
         }
 
@@ -38,12 +40,21 @@ class Playit extends Page
     protected function domain(): string
     {
         $config = File::exists('/etc/pelican-installer/installer.conf')
-            ? file_get_contents('/etc/pelican-installer/installer.conf')
+            ? (string) file_get_contents('/etc/pelican-installer/installer.conf')
             : '';
 
         preg_match('/^DOMAIN=(.+)$/m', $config, $m);
 
         return $m[1] ?? config('app.url');
+    }
+
+    protected function cfAppRouting(): bool
+    {
+        $config = File::exists('/etc/pelican-installer/installer.conf')
+            ? (string) file_get_contents('/etc/pelican-installer/installer.conf')
+            : '';
+
+        return (bool) preg_match('/^CF_APP_ROUTING\s*=\s*yes$/mi', $config);
     }
 
     protected function isCfPort(int $port): bool
