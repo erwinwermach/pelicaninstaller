@@ -1,5 +1,7 @@
 PLAYIT_API_BASE=https://api.playit.gg
-PLAYIT_MAP_FILE="$PI_ROOT/playit-tunnels.json"
+PLAYIT_MAP_FILE="/var/www/pelican/storage/app/playit-tunnels.json"
+PLAYIT_STATUS_FILE="/var/www/pelican/storage/app/playit-status.json"
+PLAYIT_PUBLIC_STATE="/var/www/pelican/storage/app/pelican-public.json"
 
 playit_api() {
   local method=$1 path=$2 body=${3:-}
@@ -74,6 +76,7 @@ playit_ensure_tunnels() {
 
   playit_api POST /v1/agents/rundata '{}'
   if echo "$PLAYIT_RESP" | jq -e . >/dev/null 2>&1; then
+    mkdir -p /var/www/pelican/storage/app
     echo "$PLAYIT_RESP" | jq -r '
       [.data.tunnels[]?
        | select(.port_type == "tcp" or .port_type == "udp")
@@ -82,9 +85,15 @@ playit_ensure_tunnels() {
        | select($port != null)
        | {key: $port, value: .display_address}]
       | from_entries' 2>/dev/null > "$PLAYIT_MAP_FILE" || true
-    chmod 644 "$PLAYIT_MAP_FILE" 2>/dev/null || true
-    echo "$PLAYIT_RESP" | jq -r '{has_premium: .data.permissions.has_premium, account_status: .data.permissions.account_status, agent_id: .data.agent_id}' 2>/dev/null > "$PI_ROOT/playit-status.json" || true
-    chmod 644 "$PI_ROOT/playit-status.json" 2>/dev/null || true
+    chown www-data:www-data "$PLAYIT_MAP_FILE" 2>/dev/null || true
+    echo "$PLAYIT_RESP" | jq -r '{has_premium: .data.permissions.has_premium, account_status: .data.permissions.account_status, agent_id: .data.agent_id}' 2>/dev/null > "$PLAYIT_STATUS_FILE" || true
+    chown www-data:www-data "$PLAYIT_STATUS_FILE" 2>/dev/null || true
+    local cf_app="false"
+    if grep -q '^CF_APP_ROUTING\s*=\s*yes' "$CONF_FILE" 2>/dev/null; then
+      cf_app="true"
+    fi
+    echo "{\"domain\":\"$DOMAIN\",\"cf_app_routing\":$cf_app}" > "$PLAYIT_PUBLIC_STATE"
+    chown www-data:www-data "$PLAYIT_PUBLIC_STATE" 2>/dev/null || true
     log "playit tunnel map updated ($PLAYIT_MAP_FILE)."
   fi
 }

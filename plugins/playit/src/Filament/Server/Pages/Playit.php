@@ -15,9 +15,10 @@ class Playit extends Page
     public function getAddressRows(): array
     {
         $server = Filament::getTenant();
-        $map = $this->readJson(config('playit.tunnels_file', '/etc/pelican-installer/playit-tunnels.json'));
-        $status = $this->readJson(config('playit.status_file', '/etc/pelican-installer/playit-status.json'));
-        $cfEnabled = $this->cfAppRouting();
+        $map = $this->readJson(config('playit.tunnels_file', '/var/www/pelican/storage/app/playit-tunnels.json'));
+        $status = $this->readJson(config('playit.status_file', '/var/www/pelican/storage/app/playit-status.json'));
+        $public = $this->readJson(config('playit.public_state_file', '/var/www/pelican/storage/app/pelican-public.json'));
+        $cfEnabled = ($public['cf_app_routing'] ?? false) === true;
 
         $rows = [];
         foreach ($server->allocations as $allocation) {
@@ -39,22 +40,15 @@ class Playit extends Page
 
     protected function domain(): string
     {
-        $config = File::exists('/etc/pelican-installer/installer.conf')
-            ? (string) file_get_contents('/etc/pelican-installer/installer.conf')
-            : '';
+        $public = $this->readJson(config('playit.public_state_file', '/var/www/pelican/storage/app/pelican-public.json'));
+        if (!empty($public['domain'])) {
+            return $public['domain'];
+        }
 
-        preg_match('/^DOMAIN=(.+)$/m', $config, $m);
+        $host = parse_url((string) config('app.url'), PHP_URL_HOST) ?: '';
+        $parts = explode('.', $host);
 
-        return $m[1] ?? config('app.url');
-    }
-
-    protected function cfAppRouting(): bool
-    {
-        $config = File::exists('/etc/pelican-installer/installer.conf')
-            ? (string) file_get_contents('/etc/pelican-installer/installer.conf')
-            : '';
-
-        return (bool) preg_match('/^CF_APP_ROUTING\s*=\s*yes$/mi', $config);
+        return count($parts) >= 2 ? implode('.', array_slice($parts, -2)) : $host;
     }
 
     protected function isCfPort(int $port): bool

@@ -19,7 +19,7 @@ class PlayitAddressWidget extends Widget
             return [];
         }
 
-        $file = config('playit.tunnels_file', '/etc/pelican-installer/playit-tunnels.json');
+        $file = config('playit.tunnels_file', '/var/www/pelican/storage/app/playit-tunnels.json');
         $map = File::exists($file) ? json_decode(File::get($file), true) : null;
         if (!is_array($map)) {
             $map = [];
