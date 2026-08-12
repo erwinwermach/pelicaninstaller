@@ -17,7 +17,8 @@ server_var() {
 server_jars_fix() {
   command -v mysql >/dev/null 2>&1 || return 0
   command -v docker >/dev/null 2>&1 || return 0
-  local uuid srvdir jarfile expected candidate mc ldr stage rep line
+  local uuid srvdir jarfile expected candidate mc ldr stage
+  local rep=""
 
   while IFS=$'\t' read -r uuid; do
     [ -n "$uuid" ] || continue
@@ -117,7 +118,7 @@ server_jars_fix() {
   if [ -n "$rep" ]; then
     {
       echo "{"
-      echo "$rep" | awk -F: '{printf "%s\"%s\": {\"jar_ok\": %s, \"jarfile\": \"%s\", \"size\": %s, \"fixed\": %s}\n", (NR>1?",":""), $1, $2, $3, $4, $5}'
+      echo "$rep" | awk -F: '{printf "%s\"%s\": {\"jar_ok\": %s, \"jarfile\": \"%s\", \"size\": %s, \"fixed\": %s}\n", (NR>1?",":""), $2, $3, $4, $5, $6}'
       echo "}"
     } > "$JAR_REPORT_FILE" 2>/dev/null || true
     chown www-data:www-data "$JAR_REPORT_FILE" 2>/dev/null || true
