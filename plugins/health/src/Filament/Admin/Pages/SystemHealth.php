@@ -11,8 +11,6 @@ class SystemHealth extends Page
 
     protected static \BackedEnum|string|null $navigationIcon = 'tabler-heartbeat';
 
-    protected static ?string $navigationGroup = 'System';
-
     protected static ?int $navigationSort = 1;
 
     public function getData(): array
