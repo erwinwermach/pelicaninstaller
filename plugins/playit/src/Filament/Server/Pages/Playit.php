@@ -8,9 +8,7 @@ use Illuminate\Support\Facades\File;
 
 class Playit extends Page
 {
-    protected static string $view = 'playit::filament.server.pages.playit';
-
-    protected static ?int $navigationSort = 5;
+    protected string $view = 'playit::filament.server.pages.playit';
 
     public function getAddressRows(): array
     {
