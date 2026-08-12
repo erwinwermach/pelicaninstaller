@@ -42,14 +42,28 @@
                             </p>
                         @else
                             <p class="text-warning-600 dark:text-warning-400">No playit tunnel for this port.</p>
-                            <x-filament::button
-                                tag="a"
-                                href="https://playit.gg/tunnels"
-                                target="_blank"
-                                size="sm"
-                                class="mt-2">
-                                Create on playit.gg (local port {{ $row['port'] }})
-                            </x-filament::button>
+                            @if($data['has_premium'] === true)
+                                <x-filament::button
+                                    tag="a"
+                                    href="https://playit.gg/account/setup/new-tunnel"
+                                    target="_blank"
+                                    size="sm"
+                                    class="mt-2">
+                                    Create TCP tunnel on playit.gg (local port {{ $row['port'] }})
+                                </x-filament::button>
+                            @else
+                                <x-filament::button
+                                    tag="a"
+                                    href="https://playit.gg/account/setup/new-tunnel"
+                                    target="_blank"
+                                    size="sm"
+                                    class="mt-2">
+                                    Create Minecraft-Java tunnel on playit.gg (free, local port {{ $row['port'] }})
+                                </x-filament::button>
+                                <p class="text-sm text-gray-500 dark:text-gray-400 mt-1">
+                                    Free accounts can only create game-type tunnels (e.g. Minecraft Java).
+                                </p>
+                            @endif
                             <p class="text-sm text-gray-500 dark:text-gray-400 mt-2">
                                 After creating it, the address appears here automatically
                                 (sync runs every 10 minutes).

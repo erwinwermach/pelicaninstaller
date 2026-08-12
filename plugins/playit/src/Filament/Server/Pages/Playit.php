@@ -10,6 +10,8 @@ class Playit extends Page
 {
     protected string $view = 'playit::filament.server.pages.playit';
 
+    protected static \BackedEnum|string|null $navigationIcon = 'tabler-brand-superhuman';
+
     public function getAddressRows(): array
     {
         $server = Filament::getTenant();

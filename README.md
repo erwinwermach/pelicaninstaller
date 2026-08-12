@@ -1,159 +1,106 @@
-# Pelican Panel + Wings + Cloudflare Zero Trust — fully automatic installer
+# Pelican Panel + Wings — fully automatic installer (Cloudflare + playit.gg)
 
-Installs **Pelican Panel + Wings + every dependency** on a single Ubuntu Server 24.04
-machine, wires it up behind **Cloudflare Zero Trust** (no open inbound ports except SSH),
-and then **keeps everything alive, updated and self-healing forever**.
+One-line installer for **Pelican Panel + Wings + every dependency** on a single
+Ubuntu Server 24.04 machine, wired up for hosting behind **CGNAT/NAT**:
 
-The only thing you ever do manually: create the admin account at
-`https://panel.yourdomain.com/installer` after the install. That's it.
+- **Panel + node API** are hidden behind a **Cloudflare Zero Trust tunnel**
+  (`panel.yourdomain.com`, `node.yourdomain.com`) — no inbound ports needed.
+- **Game servers** (Minecraft etc.) are exposed through **playit.gg** — free
+  game-type tunnels that work through CGNAT, with a panel plugin that shows
+  each server's public playit address instead of an IP.
+- **HTTP apps** (Python/JS/Node/Discord bots, web servers) can be routed
+  through the Cloudflare tunnel as `app-<port>.yourdomain.com`
+  (`CF_APP_ROUTING=yes`).
+
+Everything is automatic: OS/panel/wings updates, tunnel/DNS/cert repair,
+playit tunnel mapping, service recovery — running 24/7 via systemd.
 
 ## Install
 
 ### Requirements
-- **Ubuntu Server 24.04 (24.04.x)** — the installer refuses to run on anything else.
-- A domain on your **Cloudflare** account (zone must be active).
-- A **Cloudflare API token** (see below) — created once, takes 2 minutes.
+- Ubuntu Server 24.04 (24.04.x) — the installer refuses to run on anything else.
+- A domain on **Cloudflare** (zone active).
+- A **Cloudflare API token** (https://dash.cloudflare.com/profile/api-tokens →
+  Create Custom Token): Zone → Zone/DNS/SSL-and-Certificates (Read/Edit/Edit),
+  Account → Cloudflare Tunnel (Edit). The token does **not** need Account
+  Settings: Read — the account id is derived from your zone automatically.
+- Optional: a **playit.gg secret key** (https://playit.gg → Account → Secret
+  Key) to enable the game-tunnel integration.
 
-### 1. Create the Cloudflare API token
-Go to **https://dash.cloudflare.com/profile/api-tokens** → *Create Token* →
-*Create Custom Token*. Permissions:
-
-| Scope | Permission | Level |
-|-------|-----------|-------|
-| Account | Cloudflare Tunnel | Edit |
-| Zone | Zone | Read |
-| Zone | DNS | Edit |
-| Zone | SSL and Certificates | Edit |
-
-Zone Resources: *Include → Specific zone → your domain*.
-Account Resources: *Include → your account*.
-
-Note: the token does **not** need the "Account Settings: Read" permission —
-the installer derives your Account ID automatically from your zone. Only add
-`CF_ACCOUNT_ID` to the config file if the installer still cannot determine it
-(https://dash.cloudflare.com → right sidebar → *Account ID*).
-
-### 2. Run the installer (one line)
-SSH into your Ubuntu 24.04 server and run:
-
+### Run (one line)
 ```bash
 curl -fsSL https://raw.githubusercontent.com/erwinwermach/pelicaninstaller/main/install.sh | sudo bash
 ```
 
-You are asked **once** for: domain, Cloudflare API token, timezone, subdomains,
-game-port range and node name. Everything is saved to
-`/etc/pelican-installer/installer.conf` (root-only, mode 600) and reused forever.
-
-For a fully unattended run, pre-fill that file yourself (see `installer.conf.example`)
-and run:
+You are asked once for: domain, Cloudflare token, timezone, subdomains,
+game-port range, node name, playit secret key (optional). Everything is saved
+to `/etc/pelican-installer/installer.conf` (root-only) and reused forever.
+For unattended runs, pre-fill that file (see `installer.conf.example`):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/erwinwermach/pelicaninstaller/main/install.sh | sudo bash -s -- --config /path/to/installer.conf
 ```
 
-Or, if you have the files on the machine already: `sudo bash installer.sh`.
+### After install
+- Log in at `https://panel.yourdomain.com` — the admin account is created
+  automatically during install (credentials in
+  `/etc/pelican-installer/secrets.env`; change the password after login).
+- Create a game server in the panel → open its **Playit** page → create a
+  playit tunnel for the port (free tier: game types like Minecraft Java) →
+  the public address appears there automatically within 10 minutes. Players
+  join that address; your real IP stays hidden.
+- HTTP apps on Cloudflare-supported ports (80/443/8080/8443/2052-2087/2095-2096):
+  set `CF_APP_ROUTING=yes` in the config, restart the installer phase
+  (`sudo bash /opt/pelican-installer/installer.sh`) → app served at
+  `app-<port>.yourdomain.com`.
 
-### 3. Create the admin account (the ONLY manual step)
-After the install finishes (and the server reboots itself), open:
+## Included panel plugins (installed automatically)
 
-```
-https://panel.yourdomain.com/installer
-```
-
-Create the admin account. **Within ~5 minutes** the self-heal system notices it,
-creates the Wings node, allocates your game ports, writes `/etc/pelican/config.yml`
-and starts Wings. Check it in the panel: *Admin → Nodes* → your node → *green dot*.
-
-## What you end up with
-
-- Panel: `https://panel.yourdomain.com`
-- Node API: `https://node.yourdomain.com` (tunneled, plain HTTP origin behind proxy)
-- Game port `25565` → `game-25565.yourdomain.com` (players join the hostname; TCP+UDP)
-- SFTP (port 2022) → tunneled via `node.yourdomain.com:2022`
-- Inbound firewall: **only SSH**. Nothing else is reachable from the internet.
+| Plugin | What it does |
+|---|---|
+| **Playit** | Shows each server's playit.gg public address in the server panel; free/premium tier detection; create-tunnel links |
+| Modpack Manager | Install/update Minecraft modpacks (CurseForge, Modrinth, FTB, ATLauncher) per server |
+| Minecraft Modrinth | Install/update mods & plugins from Modrinth |
+| Player Counter | Real-time player counts |
+| System Status Monitor | Node CPU/RAM/disk monitoring |
+| Mclogs Uploader | Share server logs to mclo.gs |
 
 ## Automatic updates & self-healing
 
-Everything below runs by itself — you do nothing:
+| What | When |
+|------|------|
+| Ubuntu security + full upgrades | daily / weekly (auto-reboot handled) |
+| Pelican Panel + Wings + cloudflared updates | weekly |
+| Installer scripts self-update | every run + weekly |
+| Service recovery (mariadb/redis/php/nginx/docker/cloudflared/wings/queue) | every 5 min + on boot |
+| Tunnel + DNS + certificate repair | every 5 min |
+| playit tunnel map refresh | every 10 min |
 
-| What | When | How |
-|------|------|-----|
-| Ubuntu security patches | daily | `unattended-upgrades` (auto-reboots when needed) |
-| Ubuntu full upgrade | weekly | `pelican-update.timer` (Monday 04:00, randomized) |
-| Pelican Panel update | weekly | maintenance mode → download → composer → migrate → optimize |
-| Wings + cloudflared update | weekly | latest binary downloaded, service restarted |
-| Docker cleanup | weekly | dangling images pruned |
-| **Installer scripts update** | weekly + every run | fetches `VERSION` from GitHub; newer version replaces itself |
-| Service recovery | every 5 min + on boot | any dead service (mariadb/redis/php-fpm/nginx/docker/cloudflared/wings) restarted |
-| Tunnel recovery | every 5 min | tunnel + credentials re-created if lost |
-| DNS recovery | every 5 min | CNAME records re-pointed to the tunnel if deleted/changed |
-| Certificate renewal | before expiry | Cloudflare Origin CA certificates re-issued |
-| Wings node bootstrap | within ~5 min of `/installer` | node + allocations + config.yml created automatically |
+Manual: `sudo bash /opt/pelican-installer/installer.sh` (resumes unfinished
+phases), `sudo /opt/pelican-installer/bin/heal.sh`, `.../bin/update.sh`.
 
-The installer scripts at `/opt/pelican-installer` update themselves: each time you run
-the installer, and weekly via the update timer, they compare the local `VERSION` file
-against the GitHub `main` branch and replace themselves with the newer version.
+## Network reality
 
-Manual control:
-
-```bash
-sudo bash /opt/pelican-installer/installer.sh --update        # update installer scripts only
-sudo bash /opt/pelican-installer/installer.sh                 # run/resume the installer
-sudo bash /opt/pelican-installer/installer.sh --no-self-update
-sudo /opt/pelican-installer/bin/heal.sh                       # run self-heal now
-sudo /opt/pelican-installer/bin/update.sh                     # run all updates now
-```
-
-## Useful commands
-
-| What | Command |
-|------|---------|
-| Install logs | `/var/log/pelican/install.log` |
-| Heal logs | `/var/log/pelican/heal.log` |
-| Update logs | `/var/log/pelican/update.log` |
-| Wings status | `systemctl status wings` / `journalctl -u wings -f` |
-| Tunnel status | `systemctl status cloudflared` |
-| Config | `/etc/pelican-installer/installer.conf` |
-| Resize node resources | edit `NODE_MEMORY`/`NODE_DISK` in the config, rerun installer |
-
-## What the installer does (fully automatic)
-
-1. **Clean slate** — stops and purges any old docker/nginx/apache/php/mysql/panel/wings,
-   wipes their data, cleans apt. OS, SSH and user accounts stay intact.
-2. **Updates Ubuntu** — full upgrade, security auto-upgrades, 2 GB swap if missing,
-   fail2ban, timezone.
-3. **Installs the stack** — PHP 8.3 + extensions, MariaDB, Redis, Nginx, Composer,
-   the latest Pelican Panel, auto-creates the database and writes the `.env` for you.
-4. **Cloudflare Zero Trust** — creates a tunnel, all DNS records
-   (`panel.X`, `node.X`, `game-<port>.X`), TCP+UDP tunnel routes for every game port,
-   Cloudflare Origin CA certificates, starts `cloudflared`.
-5. **Docker + Wings** — Docker CE, Wings binary, hardened systemd service.
-6. **Firewall** — deny all inbound except SSH. Game ports are bound to loopback only
-   and served through the tunnel — your server IP stays completely hidden.
-7. **Self-heal + auto-update system** — systemd timers, logrotate, watchdog.
+Most home/colocated connections (this tool's main target) sit behind
+CGNAT — direct port forwarding is useless and game ports cannot go through a
+Cloudflare tunnel (Cloudflare only forwards HTTP ports publicly). Hence:
+playit.gg for games/TCP (outbound-only, free tier = game types), Cloudflare
+tunnel for the panel and HTTP apps. The firewall exposes only SSH plus the
+configured game-port range for LAN play; everything else stays tunneled.
 
 ## Notes
 
-- Pelican is in beta; the installer verifies every API response and the self-heal
-  system retries automatically if something drifts.
-- The wipe phase purges old docker/nginx/php/mysql/panel installations and their data.
-  It does **not** touch the OS itself, SSH or `/home`.
-- Your API token is stored at `/etc/pelican-installer/installer.conf` (root-only read).
-- Flags: `--config FILE`, `--no-reboot`, `--skip-wipe`, `--no-self-update`, `--update`.
-
-## Troubleshooting
-
-- **`/installer` doesn't load**: wait for the reboot + heal cycle (up to 2 min),
-  check `systemctl status cloudflared` and `/var/log/pelican/heal.log`.
-- **Token rejected**: recreate the token with the permissions above (Zone DNS Edit is
-  the one that's most often missing).
-- **"Could not determine account id"**: add `CF_ACCOUNT_ID` to the config file.
-- **Wings not starting**: `journalctl -u wings -f` — usually a config.yml issue; delete
-  `/etc/pelican/config.yml` and let the heal system regenerate it.
+- Pelican is in beta: the panel's web installer (`/installer`) is broken
+  (Livewire redirects while uninstalled) — this installer completes the setup
+  via the panel CLI instead (admin account, APP_INSTALLED, queue worker, eggs,
+  modern Java images).
+- Logs: `/var/log/pelican/` (install.log, heal.log, update.log).
+- Troubleshooting: check `systemctl status <service>`, the heal log, and
+  `/var/log/pelican/install.log`; rerunning the installer resumes where it
+  stopped.
 
 ## Links
 
-- Repo: https://github.com/erwinwermach/pelicaninstaller
 - Pelican docs: https://pelican.dev/docs
+- playit.gg: https://playit.gg
 - Cloudflare API tokens: https://dash.cloudflare.com/profile/api-tokens
-- Cloudflare Zero Trust: https://one.dash.cloudflare.com
