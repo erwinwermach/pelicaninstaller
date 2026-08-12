@@ -78,6 +78,10 @@ if [ -f "$NODE_ATTEMPT_FILE" ] && [ -f "$PELICAN_ETC/config.yml" ]; then
   fi
 fi
 
+# shellcheck source=../lib/jarfix.sh
+. "$HEAL_DIR/lib/jarfix.sh"
+server_jars_fix
+
 disk_used=$(df -Pk / | awk 'NR==2 {gsub(/%/,"",$5); print $5}')
 if [ "${disk_used:-0}" -gt 85 ]; then
   hlog "WARNING: disk usage at ${disk_used}%"
