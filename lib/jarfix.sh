@@ -27,11 +27,22 @@ server_jars_fix() {
     jarfile=${jarfile:-server.jar}
     expected="$srvdir/$jarfile"
 
+    # Fabric layout: fabric-server-launch.jar is a small stub by design; the
+    # real game jar lives at minecraft-server.jar next to it.
+    if [ -f "$srvdir/fabric-server-launch.jar" ]; then
+      if [ -f "$srvdir/minecraft-server.jar" ] && [ "$(stat -c %s "$srvdir/minecraft-server.jar" 2>/dev/null || echo 0)" -gt 100000 ]; then
+        if [ "$jarfile" != "fabric-server-launch.jar" ]; then
+          mysql -e "UPDATE pelican.server_variables sv JOIN pelican.egg_variables ev ON ev.id=sv.variable_id SET sv.variable_value='fabric-server-launch.jar' WHERE ev.env_variable='SERVER_JARFILE' AND sv.server_id=(SELECT id FROM pelican.servers WHERE uuid='$uuid');" 2>/dev/null || true
+        fi
+        continue
+      fi
+    fi
+
     if [ -f "$expected" ] && [ "$(stat -c %s "$expected" 2>/dev/null || echo 0)" -gt 100000 ]; then
       continue
     fi
 
-    candidate=$(find "$srvdir" -maxdepth 1 -name '*.jar' -size +100k ! -name '*installer*' ! -name '*launch*' 2>/dev/null | head -1)
+    candidate=$(find "$srvdir" -maxdepth 1 -name '*.jar' -size +100k ! -name '*installer*' ! -name '*launch*' ! -name 'minecraft-server.jar' 2>/dev/null | head -1)
     if [ -n "$candidate" ]; then
       log "Server $uuid: linking $jarfile -> $(basename "$candidate")"
       ln -sf "$(basename "$candidate")" "$expected"
