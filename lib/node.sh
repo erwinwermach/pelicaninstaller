@@ -83,9 +83,10 @@ ensure_node_record() {
   fi
 
   node_resources
+  local node_name="${NODE_NAME:-Node-1}"
   local body
   body=$(jq -nc \
-    --arg name "${NODE_NAME:-Node-1}" \
+    --arg name "$node_name" \
     --arg fqdn "$NODE_FQDN" \
     --arg sftp "sftp.$DOMAIN" \
     --argjson memory "$NODE_MEMORY" \
@@ -93,7 +94,7 @@ ensure_node_record() {
     --argjson cpu "$NODE_CPU" \
     '{name: $name, description: "auto-installed", public: true, fqdn: $fqdn, scheme: "https", behind_proxy: true, daemon_base: "/var/lib/pelican/volumes", daemon_sftp: 2022, daemon_sftp_alias: $sftp, daemon_listen: 8080, daemon_connect: 443, memory: $memory, memory_overallocate: 0, disk: $disk, disk_overallocate: 0, cpu: $cpu, cpu_overallocate: 0, upload_size: 100, maintenance_mode: false}')
 
-  log "Creating node '$NODE_NAME' ($NODE_FQDN)..."
+  log "Creating node '$node_name' ($NODE_FQDN)..."
   app_api POST /nodes "$body"
   if [ "$APP_CODE" != "201" ] && [ "$APP_CODE" != "200" ]; then
     log_err "Node creation failed (API responded $APP_CODE): $APP_RESP"

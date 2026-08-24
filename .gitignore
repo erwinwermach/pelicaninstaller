@@ -13,3 +13,7 @@ Thumbs.db
 *.log
 
 __pycache__/
+
+# plugin build output (built in CI)
+dist/
+

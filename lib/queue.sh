@@ -1,5 +1,5 @@
 queue_phase() {
-  banner "Phase 8/9 - Panel queue worker + scheduler"
+  banner "Phase 10 - Panel queue worker + scheduler"
   log "Installing panel queue worker (required for installs and plugins)..."
   cat > /etc/systemd/system/pelican-queue.service <<EOF
 [Unit]

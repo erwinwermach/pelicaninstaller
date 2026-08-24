@@ -1,0 +1,30 @@
+name: Build plugin zips
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "plugins/**"
+      - ".github/workflows/plugins.yml"
+      - "bin/build-plugins.sh"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build zips
+        run: bash bin/build-plugins.sh
+
+      - name: Publish rolling plugin release
+        run: |
+          gh release view plugins-latest >/dev/null 2>&1 || \
+            gh release create plugins-latest --title "Panel plugin zips (rolling)" --notes "Auto-built from main. The installer imports these via releases/latest/download/<plugin>.zip."
+          gh release upload plugins-latest dist/*.zip --clobber
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

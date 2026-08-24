@@ -17,8 +17,12 @@ CF_CREDS_FILE="$CF_CFG_DIR/credentials.json"
 CF_BIN="${CF_BIN:-/usr/local/bin/cloudflared}"
 PANEL_DIR="${PANEL_DIR:-/var/www/pelican}"
 PANEL_TLS_DIR="${PANEL_TLS_DIR:-/etc/pelican/tls}"
+PANEL_STORAGE="${PANEL_STORAGE:-$PANEL_DIR/storage/app}"
+ROUTES_STATE_FILE="$PANEL_STORAGE/routes.json"
 PELICAN_ETC="${PELICAN_ETC:-/etc/pelican}"
 WINGS_BIN="${WINGS_BIN:-/usr/local/bin/wings}"
+BORE_BIN="${BORE_BIN:-/usr/local/bin/bore}"
+FRPC_BIN="${FRPC_BIN:-/usr/local/bin/frpc}"
 TUNNEL_NAME_PREFIX=pelican
 LOCK_DIR="${LOCK_DIR:-/run/lock}"
 
@@ -26,8 +30,13 @@ set -a
 [ -f "$CONF_FILE" ] && . "$CONF_FILE"
 set +a
 
-PANEL_FQDN="${PANEL_FQDN:-${PANEL_SUBDOMAIN:-panel}.${DOMAIN:-}}"
-NODE_FQDN="${NODE_FQDN:-${NODE_SUBDOMAIN:-node}.${DOMAIN:-}}"
+if [ -n "${DOMAIN:-}" ]; then
+  PANEL_FQDN="${PANEL_FQDN:-${PANEL_SUBDOMAIN:-panel}.$DOMAIN}"
+  NODE_FQDN="${NODE_FQDN:-${NODE_SUBDOMAIN:-node}.$DOMAIN}"
+else
+  PANEL_FQDN="${PANEL_FQDN:-}"
+  NODE_FQDN="${NODE_FQDN:-}"
+fi
 
 banner() {
   echo ""
@@ -66,13 +75,25 @@ need_root() {
 check_os() {
   local os_release="${OS_RELEASE_FILE:-/etc/os-release}"
   if [ ! -r "$os_release" ]; then
-    die "Cannot detect OS. Ubuntu Server 24.04 required."
+    die "Cannot detect OS. Ubuntu Server 24.04 or 26.04 required."
   fi
   # shellcheck disable=SC1090
   . "$os_release"
-  if [ "$ID" != "ubuntu" ] || [[ "$VERSION_ID" != 24.04* ]]; then
-    die "This installer targets Ubuntu Server 24.04 (found: ${PRETTY_NAME:-unknown})."
+  if [ "$ID" != "ubuntu" ]; then
+    die "This installer targets Ubuntu Server (found: ${PRETTY_NAME:-unknown})."
   fi
+  case "$VERSION_ID" in
+    24.*|26.*) ;;
+    *)
+      die "Unsupported Ubuntu version '$VERSION_ID'. Use 24.04 or 26.04 LTS."
+      ;;
+  esac
+}
+
+panel_php_version() {
+  local v=""
+  [ -f "$PI_ROOT/php.version" ] && v=$(cat "$PI_ROOT/php.version" 2>/dev/null | tr -d '[:space:]')
+  echo "${v:-8.3}"
 }
 
 check_arch() {
@@ -306,4 +327,78 @@ self_update() {
 
 fqdn_ok() {
   [[ "$1" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]]
+}
+
+arch_map() {
+  case "$(uname -m)" in
+    x86_64) echo amd64 ;;
+    aarch64) echo arm64 ;;
+    *) uname -m ;;
+  esac
+}
+
+valid_game_ports() {
+  local spec=${1:-} token lo hi
+  [ -n "$spec" ] || return 1
+  for token in ${spec//,/ }; do
+    if [[ "$token" == *-* ]]; then
+      lo=${token%-*}
+      hi=${token#*-}
+    else
+      lo=$token
+      hi=$token
+    fi
+    [[ "$lo" =~ ^[0-9]+$ ]] && [[ "$hi" =~ ^[0-9]+$ ]] || return 1
+    [ "$lo" -ge 1 ] && [ "$hi" -le 65535 ] && [ "$lo" -le "$hi" ] || return 1
+    if [ $(( hi - lo + 1 )) -gt 256 ]; then
+      return 1
+    fi
+  done
+  return 0
+}
+
+default_lan_cidr() {
+  local src
+  src=$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1); exit}')
+  [ -n "$src" ] || return 0
+  echo "$(echo "$src" | cut -d. -f1-3).0/24"
+}
+
+is_cgnat_ip() {
+  case "$1" in
+    10.*|172.16.*|172.17.*|172.18.*|172.19.*|172.2[0-9].*|172.3[0-1].*|192.168.*|100.6[4-9].*|100.[7-9][0-9].*|100.12[0-7].*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+wan_ip_is_usable() {
+  local pub
+  pub=$(public_ip)
+  [ -n "$pub" ] || return 1
+  ! is_cgnat_ip "$pub"
+}
+
+public_ip() {
+  local ip=""
+  ip=$(curl -fsS -m 10 https://api.ipify.org 2>/dev/null || true)
+  [ -n "$ip" ] || ip=$(curl -fsS -m 10 https://ifconfig.me 2>/dev/null || true)
+  echo "$ip"
+}
+
+routes_state_write() {
+  mkdir -p "$(dirname "$ROUTES_STATE_FILE")"
+  local tmp
+  tmp=$(mktemp)
+  cat > "$tmp"
+  chown www-data:www-data "$tmp" 2>/dev/null || true
+  chmod 644 "$tmp"
+  mv -f "$tmp" "$ROUTES_STATE_FILE"
+}
+
+panel_env_get() {
+  local key=$1 val=""
+  if [ -f "$PANEL_DIR/.env" ]; then
+    val=$(grep -E "^${key}=" "$PANEL_DIR/.env" 2>/dev/null | tail -1 | cut -d= -f2-)
+  fi
+  echo "$val"
 }

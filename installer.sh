@@ -20,6 +20,19 @@ usage() {
   exit 0
 }
 
+print_routing_help() {
+  cat <<'EOF'
+  How should players reach your game servers? All options are free.
+    playit    playit.gg tunnels (recommended; public address, zero setup for players)
+    bore      open-source client against the free bore.pub relay (public address;
+              port changes whenever the tunnel service restarts)
+    frp-vps   your own free-tier VPS (e.g. Oracle Always Free) as relay - fully
+              stable addresses; you need SSH access to the VPS
+    direct    real router port-forwarding / UPnP - only works WITHOUT CGNAT
+    none      skip game routing entirely
+EOF
+}
+
 collect_config() {
   local default_tz="UTC"
   if command -v timedatectl >/dev/null 2>&1; then
@@ -32,7 +45,6 @@ collect_config() {
 
   tty_secret CF_API_TOKEN "Cloudflare API token (hidden): "
   [ -n "${CF_API_TOKEN:-}" ] || die "A Cloudflare API token is required. Create one at https://dash.cloudflare.com/profile/api-tokens"
-  echo ""
 
   tty_read TIMEZONE "Timezone [$default_tz]: " "$default_tz"
   TIMEZONE=${TIMEZONE:-$default_tz}
@@ -46,8 +58,21 @@ collect_config() {
   tty_read NODE_SUBDOMAIN "Node subdomain [node]: " "node"
   NODE_SUBDOMAIN=${NODE_SUBDOMAIN:-node}
 
-  tty_read GAME_PORTS "Game port range (one TCP+UDP tunnel route per port) [25565-25575]: " "25565-25575"
+  tty_read GAME_PORTS "Game port range (TCP+UDP per port) [25565-25575]: " "25565-25575"
   GAME_PORTS=${GAME_PORTS:-25565-25575}
+  valid_game_ports "$GAME_PORTS" || die "Invalid GAME_PORTS '$GAME_PORTS' (examples: 25565-25575, 27015)."
+
+  echo ""
+  print_routing_help
+  tty_read GAME_ROUTING "Routing backend [playit]: " "playit"
+  GAME_ROUTING=${GAME_ROUTING:-playit}
+  case "$GAME_ROUTING" in
+    playit|bore|frp-vps|direct|none) ;;
+    *) die "Unknown GAME_ROUTING '$GAME_ROUTING' (playit|bore|frp-vps|direct|none)." ;;
+  esac
+
+  tty_secret PLAYIT_SECRET_KEY "playit.gg secret key (hidden, empty = skip playit even if selected): "
+  echo ""
 
   tty_read NODE_NAME "Wings node name [Node-1]: " "Node-1"
   NODE_NAME=${NODE_NAME:-Node-1}
@@ -62,6 +87,8 @@ TIMEZONE=$TIMEZONE
 PANEL_SUBDOMAIN=$PANEL_SUBDOMAIN
 NODE_SUBDOMAIN=$NODE_SUBDOMAIN
 GAME_PORTS=$GAME_PORTS
+GAME_ROUTING=$GAME_ROUTING
+PLAYIT_SECRET_KEY=$PLAYIT_SECRET_KEY
 NODE_NAME=$NODE_NAME
 AUTO_REBOOT=$AUTO_REBOOT
 EOF
@@ -75,6 +102,7 @@ validate_config() {
   PANEL_SUBDOMAIN=${PANEL_SUBDOMAIN:-panel}
   NODE_SUBDOMAIN=${NODE_SUBDOMAIN:-node}
   GAME_PORTS=${GAME_PORTS:-25565-25575}
+  GAME_ROUTING=${GAME_ROUTING:-playit}
   NODE_NAME=${NODE_NAME:-Node-1}
   TIMEZONE=${TIMEZONE:-UTC}
   AUTO_REBOOT=${AUTO_REBOOT:-yes}
@@ -84,15 +112,20 @@ validate_config() {
   valid_domain "$DOMAIN" || die "Invalid domain: $DOMAIN"
   fqdn_ok "$PANEL_SUBDOMAIN" || die "Invalid panel subdomain: $PANEL_SUBDOMAIN"
   fqdn_ok "$NODE_SUBDOMAIN" || die "Invalid node subdomain: $NODE_SUBDOMAIN"
+  valid_game_ports "$GAME_PORTS" || die "Invalid GAME_PORTS '$GAME_PORTS' in $CONF_FILE (examples: 25565-25575, 27015)."
+  case "$GAME_ROUTING" in
+    playit|bore|frp-vps|direct|none) ;;
+    *) die "Invalid GAME_ROUTING '$GAME_ROUTING' in $CONF_FILE." ;;
+  esac
 }
 
 cloudflare_phase() {
-  banner "Phase 4/8 - Cloudflare Zero Trust (tunnel, DNS, certificates)"
+  banner "Phase 6 - Cloudflare Zero Trust (tunnel, DNS, certificates)"
   cf_full_ensure || die "Cloudflare Zero Trust setup failed."
 }
 
 install_heal_system() {
-  banner "Phase 7/8 - Installing self-heal + auto-update system"
+  banner "Phase 14 - Installing self-heal + auto-update system"
   local inst_dir=/opt/pelican-installer
   mkdir -p "$inst_dir"
   cp -rf "$SCRIPT_DIR/lib" "$inst_dir/"
@@ -138,13 +171,15 @@ finish_install() {
   echo ""
   echo "  Panel:      https://$PANEL_FQDN"
   echo "  Node:       https://$NODE_FQDN"
-  echo "  Game ports: tunneled via $(game_fqdn "${GAME_PORTS%%-*}") through $(game_fqdn "${GAME_PORTS##*-}")"
+  case "$GAME_ROUTING" in
+    playit) echo "  Game ports: routed via playit.gg (addresses appear on each server's Connections page)" ;;
+    bore)   echo "  Game ports: routed via bore ($BORE_RELAY)" ;;
+    frp-vps) echo "  Game ports: routed via frp through ${FRP_VPS_HOST:-your VPS}" ;;
+    direct) echo "  Game ports: direct via router port-forwarding/UPnP" ;;
+    none)   echo "  Game ports: no automatic routing configured" ;;
+  esac
   echo ""
   echo "  Admin login: username 'admin' - see $SECRETS_FILE for the password"
-  echo "  (The web installer at /installer is disabled - Pelican beta bug:"
-  echo "   Livewire requests are redirected while the app is not installed,"
-  echo "   so the admin account is created automatically via CLI instead.)"
-  echo ""
   echo "  Logs:   /var/log/pelican/   (install.log, heal.log, update.log)"
   echo "  Config: $CONF_FILE"
   echo ""
@@ -262,10 +297,14 @@ NODE_FQDN="$NODE_SUBDOMAIN.$DOMAIN"
 . "$SCRIPT_DIR/lib/node.sh"
 # shellcheck source=../lib/queue.sh
 . "$SCRIPT_DIR/lib/queue.sh"
+# shellcheck source=../lib/tune.sh
+. "$SCRIPT_DIR/lib/tune.sh"
 # shellcheck source=../lib/plugins.sh
 . "$SCRIPT_DIR/lib/plugins.sh"
-# shellcheck source=../lib/playit.sh
-. "$SCRIPT_DIR/lib/playit.sh"
+# shellcheck source=../lib/routing.sh
+. "$SCRIPT_DIR/lib/routing.sh"
+# shellcheck source=../lib/perfctl.sh
+. "$SCRIPT_DIR/lib/perfctl.sh"
 
 STAGES_DIR="$PI_ROOT/stages"
 mkdir -p "$STAGES_DIR"
@@ -278,10 +317,12 @@ run_phase egg-images egg_images_phase
 run_phase cloudflare cloudflare_phase
 run_phase wings wings_phase
 run_phase nginx-enable nginx_enable_phase
-run_phase heal-install install_heal_system
+run_phase tune tune_phase
 run_phase queue queue_phase
 run_phase plugins plugins_phase
-run_phase playit playit_phase
+run_phase routing routing_phase
+run_phase perfctl perfctl_phase
 run_phase firewall ufw_setup
+run_phase heal-install install_heal_system
 
 finish_install

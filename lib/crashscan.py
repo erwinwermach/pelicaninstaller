@@ -19,7 +19,30 @@ WINDOW = int(os.environ.get("CRASHSCAN_WINDOW", "480"))
 RETENTION = 30 * 86400
 MAX_EVENT_FILES = 1200
 CAPS = {"server": 100, "infra": 200, "audit": 600}
-SERVICES = ["mariadb", "redis-server", "php8.3-fpm", "nginx", "docker", "cloudflared", "pelican-queue", "wings"]
+def php_fpm_service():
+    try:
+        with open("/etc/pelican-installer/php.version", "r", encoding="utf-8") as fh:
+            v = fh.read().strip()
+        if not re.match(r"^\d+\.\d+$", v):
+            raise ValueError("bad version")
+    except Exception:
+        v = "8.3"
+    return "php%s-fpm" % v
+
+
+def service_list():
+    return [
+        "mariadb",
+        "redis-server",
+        php_fpm_service(),
+        "nginx",
+        "docker",
+        "cloudflared",
+        "pelican-queue",
+        "wings",
+    ]
+
+
 META_KEYS = ["id", "ts", "iso", "scope", "source", "server", "name", "level", "exit_code", "oom", "issue", "preview"]
 CONSOLE_FILES = [
     os.path.join("logs", "latest.log"),
@@ -307,7 +330,7 @@ def scan_wings_crashes(state, servers, now_ts):
 def scan_journals(state):
     events = []
     now_ts = int(time.time())
-    for svc in SERVICES:
+    for svc in service_list():
         out = run(["journalctl", "-u", svc, "--since", "%d seconds ago" % WINDOW, "-p", "warning", "-o", "json", "--no-pager"])
         if not out:
             continue

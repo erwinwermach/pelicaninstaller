@@ -1,0 +1,15 @@
+{
+    "id": "perfctl",
+    "name": "Performance",
+    "author": "pelicaninstaller",
+    "version": "1.0.0",
+    "description": "Detects each server's workload (PaperMC, Forge/Fabric, Source engine, Python, Node.js, proxies) and recommends tuned startup flags matched to the allocation size. Nothing is changed automatically - you review and apply.",
+    "category": "plugin",
+    "namespace": "Pelicaninstaller\\Perfctl",
+    "class": "PerfctlPlugin",
+    "panels": [
+        "server"
+    ],
+    "panel_version": null,
+    "composer_packages": {}
+}

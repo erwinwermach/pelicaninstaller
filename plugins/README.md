@@ -1,102 +1,56 @@
-# Pelican Plugins (research + development)
+# Pelican Plugins (self-developed)
 
-This directory is for Pelican panel plugins we develop ourselves.
-Pelican's plugin system is in beta but fully usable: plugins add pages,
-widgets, settings, routes and more without touching panel core files.
+Built and shipped as zips via GitHub Actions (rolling `plugins-latest`
+release). `lib/plugins.sh` imports them automatically on every fresh
+install via `https://github.com/erwinwermach/pelicaninstaller/releases/latest/download/<id>.zip`.
 
-## How Pelican plugins work (research summary)
+## opsboard
 
-### Structure
+All-in-one operations board, replaces the former crashlog/health/playit
+plugins (one plugin = one discovery pass = less panel overhead).
 
+- Admin pages: **System Health** (services, disk, jars), **Crashlogs**
+  (paginated timeline, filters, mclo.gs upload), **Routing** (backends +
+  per-port addresses).
+- Server pages: **Health** (jar status + schedule repair), **Crashlogs**,
+  **Connections** (join addresses per allocation with copy buttons).
+- Console widget: join addresses above the console.
+
+Data sources (written by the host watchdog, world-readable under
+`storage/app/`): `pelican-health.json`, `pelican-jars.json`,
+`crashlog/*`, `routes.json`.
+
+Performance rules for this plugin: timelines render 50 events per page
+server-side; excerpts decode on demand only; no polling; no custom CSS
+(only Filament components so it always matches the active theme).
+
+## perfctl
+
+Recommend-only startup-flag tuner. The watchdog (`lib/perfctl.sh`)
+detects each server's workload from egg name/docker image/startup:
+
+| Profile | Matches |
+|---|---|
+| mc-paper | PaperMC/Purpur/Pufferfish/Leaves |
+| mc-fabric / mc-forge | modded loaders |
+| mc-generic | vanilla & other Java Minecraft |
+| proxy-java | Velocity/Waterfall/BungeeCord |
+| source-engine | CS/GMod/TF2/L4D (srcds) |
+| python | Python yolks/startups |
+| nodejs | Node.js yolks/startups |
+
+Java recommendations are Aikar-style G1 sets sized to the allocation
+(Xms=Xmx at ~72 %, clamped 512 MB–12 GB, region size scales at ≥12 GB).
+
+**Nothing is applied automatically.** The server's Performance page shows
+current vs recommended startup; *Apply* writes a request file that the
+watchdog executes within 5 minutes (original command backed up,
+*Revert* restores it).
+
+## Building locally
+
+```bash
+bash bin/build-plugins.sh   # -> dist/<id>.zip
 ```
-plugins/<plugin-id>/
-├── plugin.json            # metadata + discovery
-├── src/                   # plugin code (app/ folder equivalent)
-│   ├── <PluginClass>.php  # main class: implements Filament\Contracts\Plugin
-│   └── ...                # models, providers, pages, resources...
-├── config/<id>.php        # config with env() values
-├── lang/                  # translations (namespaced: <id>::key)
-├── resources/views/       # blade views (namespaced: <id>::view)
-└── database/              # migrations + Seeder/<Name>Seeder.php
-```
 
-### plugin.json (required fields)
-
-```json
-{
-  "id": "my-plugin",          // MUST match the plugin folder name
-  "name": "My Plugin",
-  "author": "you",
-  "version": "1.0.0",
-  "description": "...",
-  "category": "plugin",       // plugin | theme | language
-  "namespace": "Vendor\\MyPlugin",
-  "class": "MyPlugin",        // main class in src/
-  "panels": ["admin", "app", "server"],  // optional, default: all
-  "panel_version": "^1.0.0",  // optional compatibility constraint
-  "update_url": "https://..." // optional auto-update json
-}
-```
-
-The main class implements `Filament\Contracts\Plugin`:
-
-```php
-namespace Vendor\MyPlugin;
-
-use Filament\Contracts\Plugin;
-use Filament\Panel;
-
-class MyPlugin implements Plugin
-{
-    public function getId(): string { return 'my-plugin'; }
-    public function register(Panel $panel): void { /* register pages/widgets */ }
-    public function boot(Panel $panel): void { /* runs per request */ }
-}
-```
-
-`php artisan p:plugin:make` scaffolds this (stub is in the panel repo).
-
-### Installing / updating
-
-- Import: Admin -> Plugins -> "Import from file" (zip) or import-from-URL,
-  or drop the folder into `/var/www/pelican/plugins/` and run
-  `php artisan p:plugin:install <id>`.
-- Background jobs (migrations, asset builds) require the **queue worker**
-  (`pelican-queue.service` - already installed by our installer).
-- `p:plugin:list`, `p:plugin:update`, `p:plugin:uninstall`, `p:plugin:enable/disable`.
-- API: `POST /api/application/plugins/import/url`, `POST /api/application/plugins/{id}/install`.
-
-### Settings page
-
-Implement `App\Contracts\Plugins\HasPluginSettings`:
-`getSettingsForm()`, `getSettingsFormData()`, `saveSettings(array $data)`.
-Use `EnvironmentWriterTrait` to persist values into `.env`
-(prefix env vars with the plugin id, e.g. `PLAYIT_API_KEY`).
-
-### Panel integration points
-
-- Register Filament resources/pages/widgets via `$panel->discoverPages/Resources/Widgets`
-  in `register()`.
-- Server panel tenant pages: `app/Filament/Server/Pages/...` equivalents can be
-  registered per panel id `server`.
-- Modify existing pages: static `registerCustom*` methods
-  (e.g. `Console::registerCustomWidgets(ConsoleWidgetPosition::AboveConsole, [...])`).
-
-### Marketplace
-
-https://hub.pelican.dev/plugins (58 plugins, install via panel or zip).
-
-## Plugin ideas / roadmap
-
-- **playit** (in progress, see `playit/`): show each game server's playit.gg
-  address in the server panel + one-click "new playit tunnel" for an allocation.
-- egg-images sync, player-counter, modpack shortcuts, etc.
-
-## Our install flow
-
-- Fresh installs: the installer imports/installs plugins automatically via the
-  panel application API (see `lib/plugins.sh` in the repo root).
-- For self-developed plugins: build the zip, host it, add the download URL to
-  `lib/plugins.sh`'s `PLUGIN_LIST`, and the installer (or a heal run) will
-  import + install it on existing panels too (the plugins phase runs on the
-  next `installer.sh` invocation because it is stage-tracked).
+Zip layout: archive root contains `<plugin-id>/` with `plugin.json` inside.

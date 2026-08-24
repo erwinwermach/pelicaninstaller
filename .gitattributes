@@ -4,5 +4,8 @@
 *.service text eol=lf
 *.timer text eol=lf
 *.md text eol=lf
+*.py text eol=lf
+*.php text eol=lf
+*.json text eol=lf
 VERSION text eol=lf
 installer.conf.example text eol=lf

@@ -1,19 +1,33 @@
-# Pelican Panel + Wings — fully automatic installer (Cloudflare + playit.gg)
+# Pelican Panel + Wings — fully automatic installer (Cloudflare Zero Trust + free game routing)
 
 One-line installer for **Pelican Panel + Wings + every dependency** on a single
-Ubuntu Server 24.04 machine, wired up for hosting behind **CGNAT/NAT**:
+Ubuntu Server 24.04 machine, tuned for **low-end hardware** (older CPUs, 16 GB
+RAM) and wired up for hosting behind **CGNAT/NAT**:
 
 - **Panel + node API** are hidden behind a **Cloudflare Zero Trust tunnel**
   (`panel.yourdomain.com`, `node.yourdomain.com`) — no inbound ports needed.
-- **Game servers** (Minecraft etc.) are exposed through **playit.gg** — free
-  game-type tunnels that work through CGNAT, with a panel plugin that shows
-  each server's public playit address instead of an IP.
-- **HTTP apps** (Python/JS/Node/Discord bots, web servers) can be routed
-  through the Cloudflare tunnel as `app-<port>.yourdomain.com`
-  (`CF_APP_ROUTING=yes`).
+  If a previous install already exists in your Cloudflare account, the
+  installer detects it and asks: **reuse, replace, or wipe clean**.
+- **Game servers** (Minecraft etc.) get public addresses players can join with
+  zero client-side installs. Pick your backend during install (`GAME_ROUTING`):
+
+  | Backend | Cost | Stability | Notes |
+  |---|---|---|---|
+  | `playit` (default) | free | good | playit.gg game-type tunnels; automatic |
+  | `bore` | free | best-effort | open-source client vs the free `bore.pub` relay; address port changes whenever its service restarts |
+  | `frp-vps` | free* | rock solid | uses **your own** free-tier VPS (e.g. Oracle Cloud Always Free) as relay — you provide SSH access once |
+  | `direct` | free | n/a behind CGNAT | real router port-forwarding/UPnP; only works when your connection is NOT behind CGNAT |
+
+  *Why not ngrok/zrok/Tailscale-Funnel? Verified dead ends for games: ngrok
+  free caps at 1 GB/month transfer, zrok raw TCP is private-share-only,
+  Tailscale Funnel serves TLS on ports 443/8443/10000 only (no raw game
+  protocols). TCPShield is a solid Minecraft-specific option but requires
+  moving your DNS away from Cloudflare — documented here, not automated.
+- **HTTP apps** (Python/JS/Discord bots, web servers) route through the tunnel
+  as `app-<port>.yourdomain.com` (`CF_APP_ROUTING=yes`).
 
 Everything is automatic: OS/panel/wings updates, tunnel/DNS/cert repair,
-playit tunnel mapping, service recovery — running 24/7 via systemd.
+game-tunnel mapping, service recovery — running 24/7 via systemd.
 
 ## Install
 
@@ -22,10 +36,11 @@ playit tunnel mapping, service recovery — running 24/7 via systemd.
 - A domain on **Cloudflare** (zone active).
 - A **Cloudflare API token** (https://dash.cloudflare.com/profile/api-tokens →
   Create Custom Token): Zone → Zone/DNS/SSL-and-Certificates (Read/Edit/Edit),
-  Account → Cloudflare Tunnel (Edit). The token does **not** need Account
-  Settings: Read — the account id is derived from your zone automatically.
-- Optional: a **playit.gg secret key** (https://playit.gg → Account → Secret
-  Key) to enable the game-tunnel integration.
+  Account → Cloudflare Tunnel (Edit).
+- Backend-dependent extras:
+  - `playit`: a playit.gg secret key (https://playit.gg → Account → Secret Key).
+  - `frp-vps`: SSH access to any small VPS with a public IP.
+  - `bore`: nothing — works instantly.
 
 ### Run (one line)
 ```bash
@@ -33,37 +48,56 @@ curl -fsSL https://raw.githubusercontent.com/erwinwermach/pelicaninstaller/main/
 ```
 
 You are asked once for: domain, Cloudflare token, timezone, subdomains,
-game-port range, node name, playit secret key (optional). Everything is saved
-to `/etc/pelican-installer/installer.conf` (root-only) and reused forever.
+game-port range, routing backend, node name. Everything is saved to
+`/etc/pelican-installer/installer.conf` (root-only) and reused forever.
 For unattended runs, pre-fill that file (see `installer.conf.example`):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/erwinwermach/pelicaninstaller/main/install.sh | sudo bash -s -- --config /path/to/installer.conf
 ```
 
+If the installer finds an existing Pelican tunnel/DNS from an earlier install
+(e.g. you moved to new hardware), it shows what it found and asks:
+**R** reuse it · **F** replace it fresh · **W** wipe all managed resources ·
+**A** abort. Unattended default: reuse (`CF_EXISTING=reuse|replace|clean`).
+
 ### After install
-- Log in at `https://panel.yourdomain.com` — the admin account is created
-  automatically during install (credentials in
-  `/etc/pelican-installer/secrets.env`; change the password after login).
-- Create a game server in the panel → open its **Playit** page → create a
-  playit tunnel for the port (free tier: game types like Minecraft Java) →
-  the public address appears there automatically within 10 minutes. Players
-  join that address; your real IP stays hidden.
-- HTTP apps on Cloudflare-supported ports (80/443/8080/8443/2052-2087/2095-2096):
-  set `CF_APP_ROUTING=yes` in the config, restart the installer phase
-  (`sudo bash /opt/pelican-installer/installer.sh`) → app served at
-  `app-<port>.yourdomain.com`.
+- Log in at `https://panel.yourdomain.com` — admin credentials are in
+  `/etc/pelican-installer/secrets.env`; change the password after login.
+- Create a game server → open its **Connections** page: public addresses for
+  each allocation appear automatically within ~10 minutes (watchdog syncs).
+  The console widget shows them too. Players join those addresses.
+- Open the server's **Performance** page: it detects the workload type
+  (PaperMC, Forge/Fabric, Source engine, Python, Node.js, proxies) and proposes
+  startup flags sized to the server's memory limit — **nothing is applied
+  automatically**, review and click *Apply* (one-click revert included).
+- HTTP apps: set `CF_APP_ROUTING=yes`, re-run the installer.
 
 ## Included panel plugins (installed automatically)
 
 | Plugin | What it does |
 |---|---|
-| **Playit** | Shows each server's playit.gg public address in the server panel; free/premium tier detection; create-tunnel links |
-| Modpack Manager | Install/update Minecraft modpacks (CurseForge, Modrinth, FTB, ATLauncher) per server |
+| **Ops Board** | Admin: system health, crashlog timeline (paginated, mclo.gs upload), routing overview. Server: health + one-click jar repair, crashlogs, connection addresses + console widget |
+| **Performance** | Per-server workload detection and recommend-only startup-flag tuning (apply/revert manually) |
+| Modpack Manager | Install/update Minecraft modpacks (CurseForge, Modrinth, FTB, ATLauncher) |
 | Minecraft Modrinth | Install/update mods & plugins from Modrinth |
-| Player Counter | Real-time player counts |
-| System Status Monitor | Node CPU/RAM/disk monitoring |
 | Mclogs Uploader | Share server logs to mclo.gs |
+
+Set `PANEL_PLUGINS=all|minimal|none|comma,list` to control hub plugins
+(default `minimal`). Our own two plugins always install unless
+`INSTALL_SELF_PLUGINS=no`.
+
+## Low-end hardware tuning (built in)
+
+Applied automatically as phase 9 (also retro-fitted onto existing installs):
+- PHP opcache + on-demand FPM workers sized to RAM, JIT off
+- MariaDB buffer pool capped (25 % of RAM, max 512 MB), skip-name-resolve
+- Redis memory cap (512 MB, noeviction — queue-safe)
+- nginx gzip + static asset caching + open_file_cache
+- Docker json-file log rotation (10 MB × 3) + live-restore
+- Panel caches prebuilt (`artisan optimize`, `filament:optimize`, `icons:cache`)
+- Self-heal split into light checks (5 min) and deep Cloudflare reconcile (30 min)
+- Watchdog file scans gated by change detection (no full-volume sweeps)
 
 ## Automatic updates & self-healing
 
@@ -73,20 +107,19 @@ curl -fsSL https://raw.githubusercontent.com/erwinwermach/pelicaninstaller/main/
 | Pelican Panel + Wings + cloudflared updates | weekly |
 | Installer scripts self-update | every run + weekly |
 | Service recovery (mariadb/redis/php/nginx/docker/cloudflared/wings/queue) | every 5 min + on boot |
-| Tunnel + DNS + certificate repair | every 5 min |
-| playit tunnel map refresh | every 10 min |
+| Tunnel/service/certificate repair | every 5 min (light) |
+| Full tunnel+DNS reconcile | every 30 min |
+| Game-routing address refresh | every 10 min |
 
 Manual: `sudo bash /opt/pelican-installer/installer.sh` (resumes unfinished
 phases), `sudo /opt/pelican-installer/bin/heal.sh`, `.../bin/update.sh`.
 
 ## Network reality
 
-Most home/colocated connections (this tool's main target) sit behind
-CGNAT — direct port forwarding is useless and game ports cannot go through a
-Cloudflare tunnel (Cloudflare only forwards HTTP ports publicly). Hence:
-playit.gg for games/TCP (outbound-only, free tier = game types), Cloudflare
-tunnel for the panel and HTTP apps. The firewall exposes only SSH plus the
-configured game-port range for LAN play; everything else stays tunneled.
+Most home connections sit behind CGNAT — direct port forwarding is useless and
+game ports cannot traverse a Cloudflare tunnel publicly (HTTP only). Hence the
+outbound-tunnel backends above; the firewall exposes SSH plus LAN access, and
+only opens real game ports when a usable public IP exists.
 
 ## Notes
 
@@ -103,4 +136,6 @@ configured game-port range for LAN play; everything else stays tunneled.
 
 - Pelican docs: https://pelican.dev/docs
 - playit.gg: https://playit.gg
+- bore: https://github.com/ekzhang/bore
+- frp: https://github.com/fatedier/frp
 - Cloudflare API tokens: https://dash.cloudflare.com/profile/api-tokens

@@ -1,0 +1,16 @@
+{
+    "id": "opsboard",
+    "name": "Ops Board",
+    "author": "pelicaninstaller",
+    "version": "1.0.0",
+    "description": "All-in-one operations board: system health with one-click jar repair, crashlog timeline with mclo.gs upload, player connection addresses (playit/bore/frp/direct) and Cloudflare routing overview.",
+    "category": "plugin",
+    "namespace": "Pelicaninstaller\\OpsBoard",
+    "class": "OpsBoardPlugin",
+    "panels": [
+        "admin",
+        "server"
+    ],
+    "panel_version": null,
+    "composer_packages": {}
+}

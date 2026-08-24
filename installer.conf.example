@@ -17,16 +17,40 @@ CF_API_TOKEN=
 # (https://dash.cloudflare.com -> right sidebar -> Account ID)
 CF_ACCOUNT_ID=
 
+# What to do when an existing Pelican tunnel/DNS from a previous install is
+# found on this account (interactive runs show a prompt instead):
+#   reuse   = adopt the existing tunnel (recommended when replacing a server)
+#   replace = delete old tunnel + its DNS records, create fresh
+#   clean   = additionally remove managed game/SFTP A records
+CF_EXISTING=reuse
+
 TIMEZONE=UTC
 
 PANEL_SUBDOMAIN=panel
 NODE_SUBDOMAIN=node
 GAME_SUBDOMAIN_PREFIX=game
 
-# Game ports to expose through the tunnel. Each port gets its own
-# hostname (game-25565.example.com) and its own TCP+UDP tunnel route.
+# Game ports to expose. Each port gets its own tunnel route.
 # Format: comma separated list, ranges allowed: 25565-25575,27015
 GAME_PORTS=25565-25575
+
+# How players reach game servers (all free, players install nothing):
+#   playit    playit.gg tunnels - recommended, fully automatic public addresses
+#   bore      open-source bore client vs the free bore.pub relay; the address
+#             port changes whenever its systemd service restarts
+#             (BORE_RELAY=bore.pub can point to any self-hosted relay)
+#   frp-vps   your own VPS as stable relay (e.g. Oracle Cloud Always Free).
+#             You will be asked for SSH host/user/password-or-key once.
+#   direct    real port forwarding via UPnP - only works WITHOUT CGNAT
+#   none      skip game routing
+GAME_ROUTING=playit
+
+# playit.gg secret key (https://playit.gg -> Account -> Secret Key).
+# Leave empty to run playit-less backends only.
+PLAYIT_SECRET_KEY=
+
+# Optional: playit API key (Account -> API keys) for automatic tunnel creation.
+PLAYIT_API_KEY=
 
 NODE_NAME=Node-1
 
@@ -38,19 +62,20 @@ NODE_CPU=100
 # Reboot the server automatically after install (verifies self-healing)
 AUTO_REBOOT=yes
 
-# Optional: playit.gg agent (free game-server tunneling through CGNAT).
-# Get the secret key at https://playit.gg -> Account -> Secret Key.
-# Leave empty to skip. The secret key also authenticates the playit API,
-# so tunnel creation/sync is fully automatic (one TCP tunnel per
-# allocation, named pelican-<port>; addresses written to
-# /etc/pelican-installer/playit-tunnels.json for the panel plugin).
-PLAYIT_SECRET_KEY=
+# Hub plugins from https://hub.pelican.dev:
+#   minimal  = modpack-manager, minecraft-modrinth, mclogs-uploader (default)
+#   all      = + player-counter, system-status-monitor (heavier pages)
+#   none     = hub plugins skipped
+#   or a comma list of exact ids, e.g. modpack-manager,mclogs-uploader
+PANEL_PLUGINS=minimal
 
-# Alternative: a playit.gg API key (Account -> API keys) if you have one.
-PLAYIT_API_KEY=
+# Set to "no" to skip our own Ops Board / Performance plugins.
+INSTALL_SELF_PLUGINS=yes
 
-# Route HTTP apps (Python/JS/Node/Discord bots, web servers) through the
-# Cloudflare tunnel on app-<port>.<domain> hostnames. Only works for
-# Cloudflare-supported HTTP ports (80/443/8080/8443/2052-2087/2095-2096).
-# Game/TCP ports are not routable through the tunnel - use playit for those.
+# Route HTTP apps through the Cloudflare tunnel on app-<port>.<domain>.
+# Only Cloudflare HTTP ports work publicly (80/443/8080/8443/2052-2087/2095-2096).
 CF_APP_ROUTING=no
+
+# LAN subnet allowed through the firewall (router discovery, local access).
+# Empty = auto-detect from default route as /24.
+LAN_ALLOW=

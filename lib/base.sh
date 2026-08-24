@@ -1,5 +1,5 @@
 base_phase() {
-  banner "Phase 2/8 - Base system update"
+  banner "Phase 2 - Base system update"
   export DEBIAN_FRONTEND=noninteractive
 
   log "Updating Ubuntu..."

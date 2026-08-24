@@ -1,8 +1,29 @@
+detect_php_version() {
+  apt-get update -y >>"$INSTALL_LOG" 2>&1 || true
+  local v
+  for v in 8.5 8.4 8.3; do
+    if apt-cache show "php$v-fpm" >/dev/null 2>&1 && [ "$(apt-cache policy "php$v-fpm" 2>/dev/null | grep -c Candidate)" != "0" ]; then
+      if ! apt-cache policy "php$v-fpm" 2>/dev/null | grep -q 'Candidate: (none)'; then
+        echo "$v"
+        return 0
+      fi
+    fi
+  done
+  echo ""
+}
+
 php_modules_install() {
-  local base=php8.3
+  local base="php$(panel_php_version)"
   local core_ok=0
   apt-get install -y "$base-cli" "$base-fpm" "$base-gd" "$base-mysql" "$base-mbstring" \
     "$base-bcmath" "$base-xml" "$base-curl" "$base-zip" "$base-intl" "$base-sqlite3" >>"$INSTALL_LOG" 2>&1 && core_ok=1
+  if [ "$core_ok" = "0" ]; then
+    for v in 8.5 8.4 8.3; do
+      base="php$v"
+      apt-get install -y "$base-cli" "$base-fpm" "$base-gd" "$base-mysql" "$base-mbstring" \
+        "$base-bcmath" "$base-xml" "$base-curl" "$base-zip" "$base-intl" "$base-sqlite3" >>"$INSTALL_LOG" 2>&1 && { core_ok=1; break; }
+    done
+  fi
   apt-get install -y "$base-redis" >>"$INSTALL_LOG" 2>&1 || apt-get install -y php-redis >>"$INSTALL_LOG" 2>&1 || true
   if [ "$core_ok" = "0" ] || ! dpkg -s "$base-fpm" >/dev/null 2>&1; then
     return 1
@@ -10,13 +31,24 @@ php_modules_install() {
 }
 
 panel_phase() {
-  banner "Phase 3/8 - Panel stack (PHP, MariaDB, Redis, Nginx)"
+  banner "Phase 3 - Panel stack (PHP, MariaDB, Redis, Nginx)"
   export DEBIAN_FRONTEND=noninteractive
+  PANEL_SUBDOMAIN=${PANEL_SUBDOMAIN:-panel}
+  NODE_SUBDOMAIN=${NODE_SUBDOMAIN:-node}
+  DOMAIN=${DOMAIN:-example.com}
   PANEL_FQDN="$PANEL_SUBDOMAIN.$DOMAIN"
   NODE_FQDN="$NODE_SUBDOMAIN.$DOMAIN"
 
-  log "Installing PHP 8.3 and extensions..."
-  php_modules_install || die "Failed to install PHP 8.3 modules."
+  log "Detecting available PHP version..."
+  local detected
+  detected=$(detect_php_version)
+  PHP_VER="${PHP_VER:-${detected:-8.3}}"
+  mkdir -p "$PI_ROOT"
+  echo "$PHP_VER" > "$PI_ROOT/php.version"
+  log "Using PHP $PHP_VER"
+
+  log "Installing PHP $PHP_VER and extensions..."
+  php_modules_install || die "Failed to install PHP modules."
 
   log "Installing MariaDB, Redis and Nginx..."
   apt-get install -y mariadb-server mariadb-client redis-server nginx >>"$INSTALL_LOG" 2>&1 \
@@ -25,7 +57,7 @@ panel_phase() {
   log "Starting services..."
   ensure_service mariadb 3 || die "MariaDB failed to start."
   ensure_service redis-server 3 || die "Redis failed to start."
-  ensure_service php8.3-fpm 3 || die "PHP-FPM failed to start."
+  ensure_service "php$PHP_VER-fpm" 3 || die "PHP-FPM failed to start."
   ensure_service nginx 3 || die "Nginx failed to start."
 
   log "Creating panel database..."
@@ -90,7 +122,7 @@ panel_phase() {
 write_panel_env() {
   local db_password=$1
   local redis_client=predis
-  if dpkg -s php8.3-redis >/dev/null 2>&1 || dpkg -s php-redis >/dev/null 2>&1; then
+  if dpkg -s "php$(panel_php_version)-redis" >/dev/null 2>&1 || dpkg -s php-redis >/dev/null 2>&1; then
     redis_client=phpredis
   fi
   cat > "$PANEL_DIR/.env" <<EOF
@@ -128,9 +160,20 @@ EOF
 }
 
 write_nginx_config() {
+  local listen_line="listen 127.0.0.1:8443 ssl http2;"
+  local h2_line=""
+  if command -v nginx >/dev/null 2>&1; then
+    local ngx_v
+    ngx_v=$(nginx -v 2>&1 | awk -F/ '{print $2}')
+    if [ -n "$ngx_v" ] && dpkg --compare-versions "$ngx_v" ge 1.25.1 2>/dev/null; then
+      listen_line="listen 127.0.0.1:8443 ssl;"
+      h2_line="    http2 on;"
+    fi
+  fi
   cat > /etc/nginx/sites-available/pelican.conf <<EOF
 server {
-    listen 127.0.0.1:8443 ssl http2;
+    $listen_line
+$h2_line
     server_name $PANEL_FQDN;
 
     root /var/www/pelican/public;
@@ -156,13 +199,27 @@ server {
     add_header X-Frame-Options DENY;
     add_header Referrer-Policy same-origin;
 
+    gzip on;
+    gzip_vary on;
+    gzip_comp_level 5;
+    gzip_min_length 256;
+    gzip_proxied any;
+    gzip_types
+        application/javascript
+        application/json
+        application/xml
+        font/woff2
+        image/svg+xml
+        text/css
+        text/plain;
+
     location / {
         try_files \$uri \$uri/ /index.php?\$query_string;
     }
 
     location ~ \.php\$ {
         fastcgi_split_path_info ^(.+\.php)(/.+)\$;
-        fastcgi_pass unix:/run/php/php8.3-fpm.sock;
+        fastcgi_pass unix:/run/php/php$(panel_php_version)-fpm.sock;
         fastcgi_index index.php;
         include fastcgi_params;
         fastcgi_param PHP_VALUE "upload_max_filesize = 100M \n post_max_size=100M";
@@ -185,7 +242,7 @@ EOF
 }
 
 admin_phase() {
-  banner "Phase 4/9 - Admin account (CLI, replaces broken web installer)"
+  banner "Phase 4 - Admin account"
   local count
   count=$(mysql -N -B -e "SELECT COUNT(*) FROM pelican.users;" 2>/dev/null || echo 0)
   if [ "${count:-0}" -ge 1 ] 2>/dev/null; then
@@ -225,7 +282,7 @@ admin_phase() {
 }
 
 egg_images_phase() {
-  banner "Phase 5/9 - Updating eggs with modern Java images"
+  banner "Phase 5 - Updating eggs with modern Java images"
   log "Adding Java 21/22 docker images to Java-based eggs..."
   mysql <<SQL 2>>"$INSTALL_LOG" || true
 UPDATE pelican.eggs
@@ -237,7 +294,7 @@ SQL
 }
 
 nginx_enable_phase() {
-  banner "Phase 6/8 - Finalizing nginx behind tunnel"
+  banner "Phase 8 - Finalizing nginx behind tunnel"
   if [ ! -f "$PANEL_TLS_DIR/panel/fullchain.pem" ]; then
     log "Panel TLS certificate not found yet - waiting for Cloudflare phase to issue it."
     return 1

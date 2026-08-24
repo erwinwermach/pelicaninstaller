@@ -33,13 +33,14 @@ if [ -f "$PANEL_DIR/artisan" ] && [ -f "$PANEL_DIR/.env" ] && grep -q '^APP_INST
     chmod -R 755 "$PANEL_DIR/storage" "$PANEL_DIR/bootstrap/cache"
     (cd "$PANEL_DIR" && COMPOSER_ALLOW_SUPERUSER=1 composer install --no-dev --optimize-autoloader --no-interaction) >>"$INSTALL_LOG" 2>&1 || true
     (cd "$PANEL_DIR" && php artisan storage:link) >>"$INSTALL_LOG" 2>&1 || true
-    (cd "$PANEL_DIR" && php artisan optimize:clear) >>"$INSTALL_LOG" 2>&1 || true
-    (cd "$PANEL_DIR" && php artisan filament:optimize) >>"$INSTALL_LOG" 2>&1 || true
+    # shellcheck source=../lib/tune.sh
+    . "$UPD_DIR/lib/tune.sh"
+    panel_optimize || true
     (cd "$PANEL_DIR" && php artisan migrate --seed --force) >>"$INSTALL_LOG" 2>&1 || true
     (cd "$PANEL_DIR" && php artisan queue:restart) >>"$INSTALL_LOG" 2>&1 || true
     chown -R www-data:www-data "$PANEL_DIR"
     (cd "$PANEL_DIR" && php artisan up) >>"$INSTALL_LOG" 2>&1 || true
-    restart_service php8.3-fpm
+    restart_service "php$(panel_php_version)-fpm"
     restart_service nginx
     log "Panel updated."
   fi
@@ -49,13 +50,8 @@ fi
 
 if [ -f "$PELICAN_ETC/config.yml" ]; then
   log "Updating Wings..."
-  local_arch=$(uname -m)
-  case "$local_arch" in
-    x86_64) local_arch=amd64 ;;
-    aarch64) local_arch=arm64 ;;
-  esac
   curl -fsSL -m 120 -o /tmp/wings-new \
-    "https://github.com/pelican-dev/wings/releases/latest/download/wings_linux_$local_arch" >>"$INSTALL_LOG" 2>&1 || true
+    "https://github.com/pelican-dev/wings/releases/latest/download/wings_linux_$(arch_map)" >>"$INSTALL_LOG" 2>&1 || true
   if [ -s /tmp/wings-new ]; then
     if ! cmp -s /tmp/wings-new "$WINGS_BIN"; then
       chmod +x /tmp/wings-new
@@ -72,10 +68,13 @@ if [ -x "$CF_BIN" ] && [ -n "${CF_API_TOKEN:-}" ]; then
   log "Refreshing Cloudflare tunnel state and certificates..."
   # shellcheck source=../lib/cloudflare.sh
   . "$UPD_DIR/lib/cloudflare.sh"
+  # shellcheck source=../lib/routing.sh
+  . "$UPD_DIR/lib/routing.sh"
   cf_install_binary
   cf_ensure_certs || true
   cf_ensure_dns || true
   cf_write_config || true
+  routing_sync || true
 fi
 
 log "Pruning dangling docker images..."

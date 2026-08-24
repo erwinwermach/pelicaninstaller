@@ -26,14 +26,8 @@ cf_install_binary() {
     return 0
   fi
   log "Installing cloudflared..."
-  local arch
-  arch=$(uname -m)
-  case "$arch" in
-    x86_64) arch=amd64 ;;
-    aarch64) arch=arm64 ;;
-  esac
   curl -fsSL -m 120 -o "$CF_BIN" \
-    "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-$arch" >>"$INSTALL_LOG" 2>&1 \
+    "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-$(arch_map)" >>"$INSTALL_LOG" 2>&1 \
     || return 1
   chmod +x "$CF_BIN"
 }
@@ -81,76 +75,219 @@ cf_get_zone() {
   return 1
 }
 
+cf_tunnel_list_json() {
+  cf_api GET "/accounts/$CF_ACCOUNT_ID/cfd_tunnel?is_deleted=false&per_page=20"
+  if ! cf_success; then
+    log_err "Could not list tunnels: $CF_RESP"
+    return 1
+  fi
+  echo "$CF_RESP" | jq -c --arg p "$TUNNEL_NAME_PREFIX-" \
+    '[.result[]? | select((.name // "") | startswith($p)) | {id, name, status}]' 2>/dev/null
+}
+
+cf_fetch_tunnel_token() {
+  local id=$1 tok decoded
+  cf_api POST "/accounts/$CF_ACCOUNT_ID/cfd_tunnel/$id/token"
+  if ! cf_success; then
+    return 1
+  fi
+  tok=$(echo "$CF_RESP" | jq -r '.result.token // empty' 2>/dev/null)
+  [ -n "$tok" ] || return 1
+  decoded=$(echo "$tok" | tr '_-' '/+' | base64 -d 2>/dev/null || true)
+  CF_TUNNEL_ID=$id
+  CF_TUNNEL_SECRET=$(echo "$decoded" | jq -r '.s // empty' 2>/dev/null)
+  CF_ACCOUNT_TAG=$(echo "$decoded" | jq -r '.a // empty' 2>/dev/null)
+  [ -n "$CF_TUNNEL_SECRET" ] || return 1
+  return 0
+}
+
+cf_write_creds_file() {
+  mkdir -p "$CF_CFG_DIR"
+  printf '{"AccountTag":"%s","TunnelID":"%s","TunnelSecret":"%s"}\n' \
+    "${CF_ACCOUNT_TAG:-$CF_ACCOUNT_ID}" "$CF_TUNNEL_ID" "$CF_TUNNEL_SECRET" > "$CF_CREDS_FILE"
+  chmod 600 "$CF_CREDS_FILE"
+}
+
+cf_delete_managed_dns() {
+  local tid=$1 extra_a=$2 rec name content
+  cf_api GET "/zones/$CF_ZONE_ID/dns_records?type=CNAME&per_page=100"
+  if cf_success; then
+    for rec in $(echo "$CF_RESP" | jq -r --arg t "$tid.cfargotunnel.com" \
+      '.result[]? | select(.content == $t) | .id' 2>/dev/null); do
+      cf_api DELETE "/zones/$CF_ZONE_ID/dns_records/$rec"
+      cf_success && log "Removed stale CNAME record ($rec)." || log_err "Could not remove DNS record $rec."
+    done
+  fi
+  if [ "$extra_a" = "yes" ]; then
+    local pub suffix
+    pub=$(public_ip)
+    [ -n "$pub" ] || return 0
+    suffix=".$DOMAIN"
+    cf_api GET "/zones/$CF_ZONE_ID/dns_records?type=A&per_page=200"
+    if cf_success; then
+      while IFS=$'\t' read -r rec name content; do
+        [ -n "$rec" ] || continue
+        case "$name" in
+          "game-"*"$suffix") ;;
+          "sftp$suffix") ;;
+          *) continue ;;
+        esac
+        [ "$content" = "$pub" ] || continue
+        cf_api DELETE "/zones/$CF_ZONE_ID/dns_records/$rec"
+        cf_success && log "Removed managed A record $name." || log_err "Could not remove A record $name."
+      done <<EOF
+$(echo "$CF_RESP" | jq -r '.result[]? | [.id, .name, (.content // "")] | @tsv' 2>/dev/null)
+EOF
+    fi
+  fi
+}
+
+cf_ask_policy() {
+  local val=""
+  echo ""
+  echo "An existing Pelican Cloudflare setup was found on this account/zone:"
+  echo "$CF_EXISTING_LIST" | jq -r '.[] | "  - tunnel \(.name) [\(.status)] (\(.id))"' 2>/dev/null
+  echo ""
+  echo "  R = reuse it (recommended when this replaces a previous install)"
+  echo "  F = replace it: delete the old tunnel + its DNS records, create fresh"
+  echo "  W = wipe ALL managed resources (tunnels, tunnel DNS, game/SFTP A records)"
+  echo "  A = abort so you can clean up manually"
+  while :; do
+    tty_read CF_POLICY_CHOICE "Choice [R/F/W/A]: " "R"
+    case "${CF_POLICY_CHOICE,,}" in
+      r|reuse) echo reuse; return 0 ;;
+      f|replace|fresh) echo replace; return 0 ;;
+      w|wipe|clean) echo clean; return 0 ;;
+      a|abort) echo abort; return 0 ;;
+    esac
+  done
+}
+
+cf_existing_decision() {
+  CF_EXISTING_LIST=$(cf_tunnel_list_json) || return 1
+  if [ "$CF_EXISTING_LIST" = "[]" ]; then
+    return 0
+  fi
+
+  local ids policy action
+  ids=$(echo "$CF_EXISTING_LIST" | jq -r '.[].id' 2>/dev/null)
+
+  if [ -n "${CF_TUNNEL_ID:-}" ] && echo "$ids" | grep -qx "$CF_TUNNEL_ID"; then
+    log "Stored tunnel $CF_TUNNEL_ID still exists on the account."
+    return 0
+  fi
+  if [ -f "$CF_CREDS_FILE" ]; then
+    log "Stored credentials reference a deleted tunnel - ignoring them."
+  fi
+
+  policy=${CF_EXISTING:-}
+  if [ -z "$policy" ]; then
+    if [ -t 0 ] || [ -e /dev/tty ]; then
+      action=$(cf_ask_policy)
+    else
+      policy=reuse
+      log "Non-interactive run with existing tunnels - defaulting to CF_EXISTING=reuse."
+    fi
+  else
+    action=$policy
+  fi
+
+  case "$action" in
+    reuse)
+      local first
+      first=$(echo "$CF_EXISTING_LIST" | jq -r '[.[] | select(.status != "deactivated")][0].id // .[0].id' 2>/dev/null)
+      [ -n "$first" ] || first=$(echo "$ids" | head -1)
+      log "Adopting existing tunnel $first..."
+      if cf_fetch_tunnel_token "$first"; then
+        cf_write_creds_file
+        log "Tunnel adopted: $CF_TUNNEL_ID"
+        return 0
+      fi
+      log_err "Could not obtain credentials for tunnel $first (deleted mid-run or token lacks Tunnel Edit)."
+      return 1
+      ;;
+    replace|clean)
+      local tid
+      for tid in $ids; do
+        log "Deleting old tunnel $tid..."
+        cf_api DELETE "/accounts/$CF_ACCOUNT_ID/cfd_tunnel/$tid"
+        if ! cf_success; then
+          log "Delete failed - retrying with cascade cleanup..."
+          cf_api DELETE "/accounts/$CF_ACCOUNT_ID/cfd_tunnel/$tid?cascade=true"
+        fi
+        cf_success || log_err "Tunnel $tid could not be removed (active connector elsewhere?). Continuing."
+      done
+      cf_delete_managed_dns "" no
+      if [ "$action" = "clean" ]; then
+        cf_delete_managed_dns "" yes
+      fi
+      CF_TUNNEL_ID=""
+      rm -f "$CF_CREDS_FILE" "$CF_CFG_FILE"
+      return 0
+      ;;
+    abort)
+      log_err "Aborted by user - clean up at https://one.dash.cloudflare.com and re-run."
+      return 1
+      ;;
+    *)
+      log_err "Invalid CF_EXISTING value '$action' (use reuse|replace|clean)."
+      return 1
+      ;;
+  esac
+}
+
 cf_ensure_tunnel() {
   cf_verify_token || return 1
   cf_get_account || return 1
-
-  local name
-  name=$(cf_tunnel_name)
 
   if [ -f "$CF_CREDS_FILE" ]; then
     CF_TUNNEL_ID=$(jq -r '.TunnelID // empty' "$CF_CREDS_FILE" 2>/dev/null)
     if [ -n "$CF_TUNNEL_ID" ]; then
       cf_api GET "/accounts/$CF_ACCOUNT_ID/cfd_tunnel/$CF_TUNNEL_ID"
-      if cf_success; then
+      if cf_success && [ "$(echo "$CF_RESP" | jq -r '.result.deleted_at // empty' 2>/dev/null)" = "" ]; then
         log "Using existing tunnel $CF_TUNNEL_ID"
         return 0
       fi
-      log_err "Stored tunnel no longer exists - recreating."
     fi
   fi
+
+  cf_existing_decision || return 1
+
+  local name
+  name=$(cf_tunnel_name)
 
   log "Creating Cloudflare tunnel '$name'..."
   cf_api POST "/accounts/$CF_ACCOUNT_ID/cfd_tunnel" "{\"name\":\"$name\"}"
   if ! cf_success; then
-    if echo "$CF_RESP" | grep -q '1013'; then
-      log "Tunnel name already exists (orphaned from a previous attempt) - removing it and retrying..."
-      cf_api GET "/accounts/$CF_ACCOUNT_ID/cfd_tunnel?name=$name"
-      local existing_id
-      existing_id=$(echo "$CF_RESP" | jq -r --arg n "$name" '.result[]? | select(.name == $n) | .id // empty' 2>/dev/null)
-      [ -n "$existing_id" ] && cf_api DELETE "/accounts/$CF_ACCOUNT_ID/cfd_tunnel/$existing_id"
-      cf_api POST "/accounts/$CF_ACCOUNT_ID/cfd_tunnel" "{\"name\":\"$name\"}"
-    fi
-    if ! cf_success; then
-      log_err "Tunnel creation failed: $CF_RESP"
+    if echo "$CF_RESP" | grep -q 'max_tunnels\|quota'; then
+      log_err "Tunnel quota exhausted: $CF_RESP"
       return 1
     fi
+    log "Retrying after conflict cleanup..."
+    cf_existing_decision || return 1
+    cf_api POST "/accounts/$CF_ACCOUNT_ID/cfd_tunnel" "{\"name\":\"$name\"}"
+  fi
+  if ! cf_success; then
+    log_err "Tunnel creation failed: $CF_RESP"
+    return 1
   fi
   CF_TUNNEL_ID=$(echo "$CF_RESP" | jq -r '.result.id // empty' 2>/dev/null)
 
-  local secret account_tag tok decoded
+  local secret account_tag
   secret=$(echo "$CF_RESP" | jq -r '.result.credentials_file.TunnelSecret // empty' 2>/dev/null)
   account_tag=$(echo "$CF_RESP" | jq -r '.result.credentials_file.AccountTag // empty' 2>/dev/null)
-  [ -n "$account_tag" ] || account_tag=$CF_ACCOUNT_ID
 
-  if [ -z "$secret" ]; then
-    log "Extracting tunnel secret from tunnel token..."
-    secret=$(echo "$CF_RESP" | jq -r '.result.token // empty' 2>/dev/null | tr '_-' '/+' | base64 -d 2>/dev/null | jq -r '.s // empty' 2>/dev/null)
-  fi
-
-  if [ -z "$secret" ]; then
-    log "Requesting tunnel token..."
-    cf_api POST "/accounts/$CF_ACCOUNT_ID/cfd_tunnel/$CF_TUNNEL_ID/token"
-    if cf_success; then
-      tok=$(echo "$CF_RESP" | jq -r '.result.token // empty' 2>/dev/null)
-      if [ -n "$tok" ]; then
-        decoded=$(echo "$tok" | tr '_-' '/+' | base64 -d 2>/dev/null || true)
-        secret=$(echo "$decoded" | jq -r '.s // empty' 2>/dev/null)
-        account_tag=$(echo "$decoded" | jq -r '.a // empty' 2>/dev/null)
-      fi
+  if [ -z "$secret" ] || [ -z "$CF_TUNNEL_ID" ]; then
+    if ! cf_fetch_tunnel_token "$CF_TUNNEL_ID"; then
+      log_err "Could not obtain tunnel credentials. Create the tunnel manually at https://one.dash.cloudflare.com and run the installer again."
+      return 1
     fi
+  else
+    CF_TUNNEL_SECRET=$secret
+    CF_ACCOUNT_TAG=$account_tag
   fi
 
-  if [ -z "$CF_TUNNEL_ID" ] || [ -z "$secret" ]; then
-    log_err "Could not obtain tunnel credentials. Create the tunnel manually at https://one.dash.cloudflare.com and run the installer again."
-    return 1
-  fi
-
-  mkdir -p "$CF_CFG_DIR"
-  cat > "$CF_CREDS_FILE" <<EOF
-{"AccountTag":"$account_tag","TunnelID":"$CF_TUNNEL_ID","TunnelSecret":"$secret"}
-EOF
-  chmod 600 "$CF_CREDS_FILE"
+  cf_write_creds_file
   log "Tunnel created: $CF_TUNNEL_ID"
 }
 
@@ -159,13 +296,6 @@ game_origin_ip() {
   gw=$(docker network inspect pelican_nw --format '{{(index .IPAM.Config 0).Gateway}}' 2>/dev/null)
   [ -n "$gw" ] || gw=127.0.0.1
   echo "$gw"
-}
-
-public_ip() {
-  local ip=""
-  ip=$(curl -fsS -m 10 https://api.ipify.org 2>/dev/null || true)
-  [ -n "$ip" ] || ip=$(curl -fsS -m 10 https://ifconfig.me 2>/dev/null || true)
-  echo "$ip"
 }
 
 cf_app_port_supported() {
@@ -229,6 +359,19 @@ cf_dns_ensure() {
   cf_success || log_err "DNS update failed for $name: $CF_RESP"
 }
 
+cgnat_notice_once() {
+  local marker="$PI_ROOT/.cgnat-notice"
+  [ -f "$marker" ] && return 0
+  {
+    echo "Public IP is behind CGNAT (shared carrier address) - direct A records for"
+    echo "game hostnames would be unreachable and were NOT created."
+    echo "Players connect via the configured GAME_ROUTING backend instead"
+    echo "(playit.gg by default). SFTP stays reachable over LAN or a VPS tunnel."
+  } | tee -a "$INSTALL_LOG" >&2
+  mkdir -p "$PI_ROOT"
+  touch "$marker"
+}
+
 cf_ensure_dns() {
   [ -n "$CF_TUNNEL_ID" ] || cf_ensure_tunnel || return 1
   [ -n "$CF_ZONE_ID" ] || cf_get_zone || return 1
@@ -244,33 +387,43 @@ cf_ensure_dns() {
     done
   fi
 
-  local pub port
-  pub=$(public_ip)
-  if [ -n "$pub" ]; then
+  if wan_ip_is_usable; then
+    rm -f "$PI_ROOT/.cgnat-notice"
+    local pub port
+    pub=$(public_ip)
     for port in $(expand_ports "${GAME_PORTS:-25565-25575}"); do
       cf_dns_ensure A "$(game_fqdn "$port")" "$pub" false
     done
     cf_dns_ensure A "sftp.$DOMAIN" "$pub" false
   else
-    log_err "Could not detect public IP - game hostnames not updated."
+    cgnat_notice_once
   fi
 }
 
 upnp_ensure() {
   command -v upnpc >/dev/null 2>&1 || apt-get install -y miniupnpc >>"$INSTALL_LOG" 2>&1 || return 0
-  if ! upnpc -s 2>/dev/null | grep -qi "ExternalIPAddress"; then
+  local ext
+  ext=$(upnpc -s 2>/dev/null | awk '/ExternalIPAddress/ {print $3}')
+  if [ -z "$ext" ]; then
     log "Router UPnP not available. Enable UPnP on the router or add manual port forwards:"
     log "  ${GAME_PORTS:-25565-25575} TCP+UDP and 2022 TCP -> $(ip route get 1.1.1.1 2>/dev/null | awk '{print $7; exit}')"
     return 0
   fi
-  local lan_ip first last
+  if is_cgnat_ip "$ext"; then
+    log "Router WAN $ext is carrier-grade NAT - port mappings would not receive inbound traffic; skipping."
+    log "Game connectivity comes from the routing backend (see GAME_ROUTING in $CONF_FILE)."
+    return 0
+  fi
+  local lan_ip port count=0 total=0
   lan_ip=$(ip route get 1.1.1.1 2>/dev/null | awk '{print $7; exit}')
-  first=${GAME_PORTS%%-*}
-  last=${GAME_PORTS##*-}
-  upnpc -a "$lan_ip" "$first" "$last" TCP >>"$INSTALL_LOG" 2>&1 || true
-  upnpc -a "$lan_ip" "$first" "$last" UDP >>"$INSTALL_LOG" 2>&1 || true
-  upnpc -a "$lan_ip" 2022 2022 TCP >>"$INSTALL_LOG" 2>&1 || true
-  log "UPnP port mappings ensured ($first-$last TCP/UDP + 2022)."
+  for port in $(expand_ports "${GAME_PORTS:-25565-25575}"); do
+    total=$((total + 2))
+    upnpc -a "$lan_ip" "$port" "$port" TCP >>"$INSTALL_LOG" 2>&1 && count=$((count + 1))
+    upnpc -a "$lan_ip" "$port" "$port" UDP >>"$INSTALL_LOG" 2>&1 && count=$((count + 1))
+  done
+  total=$((total + 1))
+  upnpc -a "$lan_ip" 2022 2022 TCP >>"$INSTALL_LOG" 2>&1 && count=$((count + 1))
+  log "UPnP port mappings ensured ($count/$total): ${GAME_PORTS:-25565-25575} TCP+UDP per port + 2022."
 }
 
 cf_write_config() {
@@ -381,6 +534,43 @@ cf_full_ensure() {
   return 0
 }
 
+cf_light_ensure() {
+  if ! systemctl is-active --quiet cloudflared 2>/dev/null; then
+    [ -f "$CF_CREDS_FILE" ] && [ -f "$CF_CFG_FILE" ] && cf_install_binary && cf_ensure_service || return 1
+    return 0
+  fi
+  local tmp ok=0
+  tmp=$(mktemp)
+  if cf_config_content "$tmp" && cmp -s "$tmp" "$CF_CFG_FILE"; then
+    ok=1
+  fi
+  rm -f "$tmp"
+  if [ "$ok" != "1" ]; then
+    cf_write_config || return 1
+    restart_service cloudflared
+  fi
+  if cf_cert_expiring "$PANEL_TLS_DIR/panel/fullchain.pem"; then
+    cf_ensure_certs || return 1
+    restart_service nginx
+  fi
+  return 0
+}
+
+cf_deep_due() {
+  local marker="$PI_ROOT/.cf-deep-last"
+  local interval=${CF_DEEP_INTERVAL:-1800}
+  local now last age
+  now=$(date +%s)
+  last=$(stat -c %Y "$marker" 2>/dev/null || echo 0)
+  age=$(( now - last ))
+  [ "$age" -ge "$interval" ]
+}
+
+cf_deep_mark() {
+  mkdir -p "$PI_ROOT"
+  touch "$PI_ROOT/.cf-deep-last"
+}
+
 ufw_setup() {
   log "Configuring firewall (SSH + game ports open, everything else tunneled)..."
   local ssh_port=22
@@ -388,8 +578,11 @@ ufw_setup() {
   ssh_port=${ssh_port:-22}
   ufw allow "$ssh_port/tcp" >>"$INSTALL_LOG" 2>&1 || true
   ufw allow 22/tcp >>"$INSTALL_LOG" 2>&1 || true
-  ufw allow "${GAME_PORTS:-25565-25575}/tcp" >>"$INSTALL_LOG" 2>&1 || true
-  ufw allow "${GAME_PORTS:-25565-25575}/udp" >>"$INSTALL_LOG" 2>&1 || true
+  local port_token
+  for port_token in $(ufw_port_tokens "${GAME_PORTS:-}"); do
+    ufw allow "${port_token}/tcp" >>"$INSTALL_LOG" 2>&1 || true
+    ufw allow "${port_token}/udp" >>"$INSTALL_LOG" 2>&1 || true
+  done
   ufw allow 2022/tcp >>"$INSTALL_LOG" 2>&1 || true
   if [ -n "${SSH_CONNECTION:-}" ]; then
     local client_ip
@@ -397,6 +590,12 @@ ufw_setup() {
     if [ -n "$client_ip" ]; then
       ufw allow from "$client_ip" >>"$INSTALL_LOG" 2>&1 || true
     fi
+  fi
+  local lan_cidr="${LAN_ALLOW:-$(default_lan_cidr)}"
+  if [ -n "$lan_cidr" ]; then
+    ufw allow in from "$lan_cidr" comment 'LAN' >>"$INSTALL_LOG" 2>&1 || \
+      ufw allow in from "$lan_cidr" >>"$INSTALL_LOG" 2>&1 || true
+    log "LAN rule active for $lan_cidr (router discovery, local panel access)."
   fi
   ufw default deny incoming >>"$INSTALL_LOG" 2>&1 || true
   ufw default allow outgoing >>"$INSTALL_LOG" 2>&1 || true

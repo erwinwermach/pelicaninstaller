@@ -24,12 +24,20 @@ if [ ! -f "$CONF_FILE" ]; then
   exit 0
 fi
 
+PANEL_SUBDOMAIN=${PANEL_SUBDOMAIN:-panel}
+NODE_SUBDOMAIN=${NODE_SUBDOMAIN:-node}
+if [ -z "${DOMAIN:-}" ]; then
+  hlog "config has no DOMAIN - skipping"
+  exit 0
+fi
+
 PANEL_FQDN="$PANEL_SUBDOMAIN.$DOMAIN"
 NODE_FQDN="$NODE_SUBDOMAIN.$DOMAIN"
+PHP_FPM="php$(panel_php_version)-fpm"
 
 core_services() {
   local svc
-  for svc in mariadb redis-server php8.3-fpm nginx docker; do
+  for svc in mariadb redis-server "$PHP_FPM" nginx docker; do
     if ! ensure_service "$svc" 2; then
       hlog "FAILED to bring up $svc"
     fi
@@ -41,8 +49,17 @@ core_services
 if [ -n "${CF_API_TOKEN:-}" ]; then
   # shellcheck source=../lib/cloudflare.sh
   . "$HEAL_DIR/lib/cloudflare.sh"
-  if ! cf_full_ensure > /dev/null 2>&1; then
-    hlog "cloudflare ensure reported problems (see $LOG_DIR/heal.log)"
+  if cf_deep_due; then
+    if ! cf_full_ensure > /dev/null 2>&1; then
+      hlog "cloudflare deep ensure reported problems (see $LOG_DIR/heal.log)"
+    fi
+    cf_deep_mark
+  else
+    if ! cf_light_ensure > /dev/null 2>&1; then
+      hlog "cloudflare light ensure failed - escalating to full check"
+      cf_full_ensure > /dev/null 2>&1 || hlog "cloudflare full ensure failed too"
+      cf_deep_mark
+    fi
   fi
 else
   if [ -f "$CF_CFG_FILE" ] && [ -x "$CF_BIN" ]; then
@@ -52,7 +69,7 @@ fi
 
 if ! curl -k -sS -m 10 -o /dev/null https://127.0.0.1:8443/ 2>/dev/null; then
   hlog "panel unreachable - restarting nginx and php-fpm"
-  restart_service php8.3-fpm
+  restart_service "$PHP_FPM"
   restart_service nginx
   sleep 3
   curl -k -sS -m 10 -o /dev/null https://127.0.0.1:8443/ 2>/dev/null || hlog "panel still unreachable"
@@ -69,12 +86,19 @@ fi
 . "$HEAL_DIR/lib/node.sh"
 ensure_node
 
-# shellcheck source=../lib/playit.sh
-. "$HEAL_DIR/lib/playit.sh"
-if [ -f "$NODE_ATTEMPT_FILE" ] && [ -f "$PELICAN_ETC/config.yml" ]; then
-  if [ ! -f "$PI_ROOT/.playit-synced" ] || [ $(($(date +%s) - $(stat -c %Y "$PI_ROOT/.playit-synced" 2>/dev/null || echo 0))) -gt 600 ]; then
-    playit_ensure_tunnels
-    touch "$PI_ROOT/.playit-synced" 2>/dev/null || true
+# shellcheck source=../lib/routing.sh
+. "$HEAL_DIR/lib/routing.sh"
+if [ "$GAME_ROUTING" != "none" ]; then
+  if [ ! -f "$PI_ROOT/.routing-synced" ] || [ $(($(date +%s) - $(stat -c %Y "$PI_ROOT/.routing-synced" 2>/dev/null || echo 0))) -gt 600 ]; then
+    case "$GAME_ROUTING" in
+      playit)
+        if [ -f "$NODE_ATTEMPT_FILE" ] && [ -f "$PELICAN_ETC/config.yml" ]; then
+          playit_create_tunnels > /dev/null 2>&1 || true
+        fi
+        ;;
+    esac
+    routing_sync >>"$INSTALL_LOG" 2>&1 || hlog "routing sync failed"
+    touch "$PI_ROOT/.routing-synced" 2>/dev/null || true
   fi
 fi
 
@@ -83,6 +107,11 @@ fi
 process_repair_requests
 server_jars_fix
 server_permissions_fix
+
+# shellcheck source=../lib/perfctl.sh
+. "$HEAL_DIR/lib/perfctl.sh"
+perfctl_scan
+perfctl_process_requests
 
 # shellcheck source=../lib/crashscan.sh
 . "$HEAL_DIR/lib/crashscan.sh"
@@ -96,14 +125,23 @@ write_health_json() {
     echo "{"
     echo "  \"last_heal\": \"$(date -Is)\","
     echo "  \"disk_used\": ${disk_used:-0},"
+    echo "  \"game_routing\": \"$GAME_ROUTING\","
     echo "  \"services\": {"
     first=1
-    for s in mariadb redis-server php8.3-fpm nginx docker cloudflared wings pelican-queue; do
+    for s in mariadb redis-server "$PHP_FPM" nginx docker cloudflared wings pelican-queue; do
       if [ "$first" -ne 1 ]; then echo ","; fi
       first=0
       st=$(systemctl is-active "$s" 2>/dev/null || true)
       [ -n "$st" ] || st=unknown
       printf '    "%s": "%s"' "$s" "$st"
+    done
+    for extra in frpc; do
+      systemctl list-unit-files "${extra}.service" >/dev/null 2>&1 || continue
+      if [ "$first" -ne 1 ]; then echo ","; fi
+      first=0
+      st=$(systemctl is-active "$extra" 2>/dev/null || true)
+      [ -n "$st" ] || st=unknown
+      printf '    "%s": "%s"' "$extra" "$st"
     done
     if [ "$first" -ne 1 ]; then echo ","; fi
     st=inactive
