@@ -17,6 +17,10 @@ usage() {
   echo "      --no-self-update  Do not check for a newer installer version"
   echo "      --update        Update the installer scripts from GitHub and exit"
   echo "  -h, --help          Show this help"
+  echo ""
+  echo "  Wipe control: WIPE_FIRST=yes|no in the config file, or answer the"
+  echo "  interactive prompt (default yes on fresh machines). The wipe never"
+  echo "  touches the OS, SSH, user accounts, installer config or scripts."
   exit 0
 }
 
@@ -113,6 +117,7 @@ validate_config() {
   NODE_NAME=${NODE_NAME:-Node-1}
   TIMEZONE=${TIMEZONE:-UTC}
   AUTO_REBOOT=${AUTO_REBOOT:-yes}
+  WIPE_FIRST=${WIPE_FIRST:-}
 
   [ -n "$DOMAIN" ] || die "DOMAIN is not set in $CONF_FILE"
   [ -n "$CF_API_TOKEN" ] || die "CF_API_TOKEN is not set in $CONF_FILE"
@@ -315,6 +320,30 @@ NODE_FQDN="$NODE_SUBDOMAIN.$DOMAIN"
 
 STAGES_DIR="$PI_ROOT/stages"
 mkdir -p "$STAGES_DIR"
+
+if [ "$SKIP_WIPE" = "0" ]; then
+  case "${WIPE_FIRST:-}" in
+    no)
+      SKIP_WIPE=1
+      log "Wipe skipped (WIPE_FIRST=no)."
+      ;;
+    yes) : ;;
+    *)
+      if tty_available; then
+        echo ""
+        echo "Clean-slate wipe: removes panel/web/database/Docker/game-tunnel data"
+        echo "that this installer manages, so the machine is ready for a fresh setup."
+        echo "The OS, SSH access, your user accounts, $PI_ROOT and"
+        echo "$SCRIPT_DIR are NOT touched."
+        tty_read WIPE_ANSWER "Wipe existing data first? [yes/no]: " "yes"
+        if [ "${WIPE_ANSWER:-yes}" != "yes" ]; then
+          SKIP_WIPE=1
+          log "Wipe skipped by user."
+        fi
+      fi
+      ;;
+  esac
+fi
 
 run_phase wipe wipe_phase
 run_phase base base_phase

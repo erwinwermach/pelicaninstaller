@@ -67,6 +67,14 @@ NODE_CPU=100
 # Reboot the server automatically after install (verifies self-healing)
 AUTO_REBOOT=yes
 
+# Clean-slate wipe before installing?
+#   (unset) = ask once during interactive installs; non-interactive runs wipe
+#   yes     = always wipe first: removes panel/web/database/Docker/game-tunnel
+#             data this installer manages (the OS, SSH, user accounts, installer
+#             config and scripts are never touched)
+#   no      = never wipe; run with whatever is already installed
+WIPE_FIRST=
+
 # Hub plugins from https://hub.pelican.dev:
 #   minimal  = modpack-manager, minecraft-modrinth, mclogs-uploader (default)
 #   all      = + player-counter, system-status-monitor (heavier pages)

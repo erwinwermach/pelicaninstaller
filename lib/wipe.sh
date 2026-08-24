@@ -1,7 +1,7 @@
 WIPE_SERVICES="docker containerd docker.socket nginx apache2 caddy mysql mariadb redis-server cloudflared wings php8.1-fpm php8.2-fpm php8.3-fpm php8.4-fpm php8.5-fpm php-fpm frpc bore@25565"
 
 wipe_phase() {
-  banner "Phase 1 - Clean slate wipe"
+  banner "Phase 1 - Clean slate wipe (keeps OS, SSH, user data)"
   log "Stopping all conflicting services..."
   local svc
   for svc in $WIPE_SERVICES; do

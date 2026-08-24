@@ -48,7 +48,11 @@ curl -fsSL https://raw.githubusercontent.com/erwinwermach/pelicaninstaller/main/
 ```
 
 You are asked once for: domain, Cloudflare token, timezone, subdomains,
-game-port range, routing backend, node name. Everything is saved to
+game-port range, routing backend, node name, and whether to wipe existing
+installer-managed data first (clean slate). The wipe never touches the OS,
+SSH, your user accounts, `/etc/pelican-installer` or the installer scripts —
+it removes the panel/web/database/Docker/game-tunnel data so the machine is
+ready for a fresh setup. Everything is saved to
 `/etc/pelican-installer/installer.conf` (root-only) and reused forever.
 For unattended runs, pre-fill that file (see `installer.conf.example`):
 
