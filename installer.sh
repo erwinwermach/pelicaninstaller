@@ -267,6 +267,76 @@ if [ "${NO_SELF_UPDATE:-0}" != "1" ]; then
   fi
 fi
 
+# ------------------------------------------------------------------
+# optional full clean-slate reset (wipe + re-download installer from GitHub)
+# ------------------------------------------------------------------
+# Decided BEFORE the config is loaded: a confirmed wipe clears the config,
+# stages and secrets too, then re-fetches this installer fresh - so broken
+# configs (e.g. a corrupted CF token) can never survive into the next run.
+if [ "$SKIP_WIPE" = "0" ]; then
+  wipe_peek=""
+  [ -f "$CONF_FILE" ] && wipe_peek=$(grep -E '^WIPE_FIRST=' "$CONF_FILE" 2>/dev/null | tail -1 | cut -d= -f2-)
+  if [ -z "$wipe_peek" ] && [ -n "${CONF_FILE_ARG:-}" ] && [ -f "$CONF_FILE_ARG" ]; then
+    wipe_peek=$(grep -E '^WIPE_FIRST=' "$CONF_FILE_ARG" 2>/dev/null | tail -1 | cut -d= -f2-)
+  fi
+  case "$wipe_peek" in
+    no)
+      SKIP_WIPE=1
+      log "Wipe skipped (WIPE_FIRST=no)."
+      ;;
+    yes) : ;;
+    *)
+      if tty_available; then
+        echo ""
+        echo "Full reset: removes panel/web/database/Docker/game-tunnel data AND this"
+        echo "installer's config/stages, then re-downloads the installer fresh from"
+        echo "GitHub so nothing stale can break the setup."
+        echo "The OS, SSH access and your user accounts are NOT touched."
+        tty_read WIPE_ANSWER "Reset everything and re-download the installer? [yes/no]: " "yes"
+        [ "${WIPE_ANSWER:-yes}" = "yes" ] || SKIP_WIPE=1
+      elif [ -d "$PI_ROOT/stages" ] && [ -n "$(ls -A "$PI_ROOT/stages" 2>/dev/null)" ]; then
+        SKIP_WIPE=1
+        log "Existing install state found - skipping reset so the install can resume."
+        log "Set WIPE_FIRST=yes in $CONF_FILE to force a full clean-slate reset."
+      fi
+      ;;
+  esac
+fi
+
+if [ "$SKIP_WIPE" = "0" ]; then
+  log "Downloading the latest installer from GitHub first (so a failure cannot leave the box half-wiped)..."
+  reset_tmp=$(mktemp -d)
+  if ! curl -fsSL -m 180 -o "$reset_tmp/pi.tar.gz" "$PI_REPO_TARBALL" || \
+     ! tar -xzf "$reset_tmp/pi.tar.gz" -C "$reset_tmp"; then
+    rm -rf "$reset_tmp"
+    log_err "Could not download the installer tarball - aborting the reset, nothing was wiped."
+    exit 1
+  fi
+  reset_srcdir=$(find "$reset_tmp" -maxdepth 2 -name installer.sh -printf '%h' -quit 2>/dev/null)
+  if [ -z "$reset_srcdir" ]; then
+    rm -rf "$reset_tmp"
+    log_err "Downloaded tarball is invalid (installer.sh missing) - aborting the reset, nothing was wiped."
+    exit 1
+  fi
+
+  log "Wiping all installer-managed data and installer state..."
+  . "$SCRIPT_DIR/lib/wipe.sh"
+  wipe_phase
+  rm -rf "$PI_ROOT" /var/log/pelican /run/pelican-node-attempt
+  crontab -u www-data -r >/dev/null 2>&1 || true
+
+  log "Replacing the installer with the fresh GitHub copy..."
+  rm -rf /opt/pelican-installer
+  mkdir -p /opt/pelican-installer
+  cp -rf "$reset_srcdir/." /opt/pelican-installer/
+  chmod +x /opt/pelican-installer/bin/*.sh 2>/dev/null || true
+  rm -rf "$reset_tmp"
+
+  log "Reset complete - starting a fresh setup."
+  exec 8>&-
+  exec bash /opt/pelican-installer/installer.sh --no-self-update --skip-wipe "$@"
+fi
+
 if [ "${CONF_FILE_ARG:-}" != "" ]; then
   cp -f "$CONF_FILE_ARG" "$CONF_FILE"
   chmod 600 "$CONF_FILE"
@@ -320,30 +390,6 @@ NODE_FQDN="$NODE_SUBDOMAIN.$DOMAIN"
 
 STAGES_DIR="$PI_ROOT/stages"
 mkdir -p "$STAGES_DIR"
-
-if [ "$SKIP_WIPE" = "0" ]; then
-  case "${WIPE_FIRST:-}" in
-    no)
-      SKIP_WIPE=1
-      log "Wipe skipped (WIPE_FIRST=no)."
-      ;;
-    yes) : ;;
-    *)
-      if tty_available; then
-        echo ""
-        echo "Clean-slate wipe: removes panel/web/database/Docker/game-tunnel data"
-        echo "that this installer manages, so the machine is ready for a fresh setup."
-        echo "The OS, SSH access, your user accounts, $PI_ROOT and"
-        echo "$SCRIPT_DIR are NOT touched."
-        tty_read WIPE_ANSWER "Wipe existing data first? [yes/no]: " "yes"
-        if [ "${WIPE_ANSWER:-yes}" != "yes" ]; then
-          SKIP_WIPE=1
-          log "Wipe skipped by user."
-        fi
-      fi
-      ;;
-  esac
-fi
 
 run_phase wipe wipe_phase
 run_phase base base_phase

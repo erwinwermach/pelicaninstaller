@@ -67,12 +67,15 @@ NODE_CPU=100
 # Reboot the server automatically after install (verifies self-healing)
 AUTO_REBOOT=yes
 
-# Clean-slate wipe before installing?
-#   (unset) = ask once during interactive installs; non-interactive runs wipe
-#   yes     = always wipe first: removes panel/web/database/Docker/game-tunnel
-#             data this installer manages (the OS, SSH, user accounts, installer
-#             config and scripts are never touched)
-#   no      = never wipe; run with whatever is already installed
+# Clean-slate reset before installing?
+#   (unset) = ask once during interactive installs; non-interactive runs skip
+#             the reset when an install is already in progress (resume), and
+#             wipe on machines with no existing state
+#   yes     = full reset: removes panel/web/database/Docker/game-tunnel data
+#             AND this installer's config/stages/secrets, then re-downloads
+#             the installer fresh from GitHub and starts over. The OS, SSH,
+#             user accounts and files are never touched.
+#   no      = never reset; run with whatever is already installed
 WIPE_FIRST=
 
 # Hub plugins from https://hub.pelican.dev:
