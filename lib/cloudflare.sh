@@ -82,7 +82,7 @@ cf_tunnel_list_json() {
     return 1
   fi
   echo "$CF_RESP" | jq -c --arg p "$TUNNEL_NAME_PREFIX-" \
-    '[.result[]? | select((.name // "") | startswith($p)) | {id, name, status}]' 2>/dev/null
+    '[.result[]? | select((.name // "") | startswith($p)) | {id, name, status, connections: ((.connections // []) | length)}]' 2>/dev/null
 }
 
 cf_fetch_tunnel_token() {
@@ -145,10 +145,11 @@ EOF
 cf_ask_policy() {
   local val=""
   echo ""
-  echo "An existing Pelican Cloudflare setup was found on this account/zone:"
-  echo "$CF_EXISTING_LIST" | jq -r '.[] | "  - tunnel \(.name) [\(.status)] (\(.id))"' 2>/dev/null
+  echo "A tunnel named '$(cf_tunnel_name)' already exists on this account:"
+  echo "$CF_EXISTING_LIST" | jq -r --arg n "$(cf_tunnel_name)" \
+    '.[] | select(.name == $n) | "  - \(.name) [\(.status)] connections=\(.connections) (\(.id))"' 2>/dev/null
   echo ""
-  echo "  R = reuse it (recommended when this replaces a previous install)"
+  echo "  R = reuse it (recommended when the old server is still running)"
   echo "  F = replace it: delete the old tunnel + its DNS records, create fresh"
   echo "  W = wipe ALL managed resources (tunnels, tunnel DNS, game/SFTP A records)"
   echo "  A = abort so you can clean up manually"
@@ -169,57 +170,69 @@ cf_existing_decision() {
     return 0
   fi
 
-  local ids policy action
-  ids=$(echo "$CF_EXISTING_LIST" | jq -r '.[].id' 2>/dev/null)
+  local desired_name
+  desired_name=$(cf_tunnel_name)
 
-  if [ -n "${CF_TUNNEL_ID:-}" ] && echo "$ids" | grep -qx "$CF_TUNNEL_ID"; then
-    log "Stored tunnel $CF_TUNNEL_ID still exists on the account."
+  # Only a tunnel with OUR exact name matters. Other pelican-* tunnels are
+  # unrelated installs (e.g. a different server on the same account) - never touch them.
+  local ours
+  ours=$(echo "$CF_EXISTING_LIST" | jq -c --arg n "$desired_name" \
+    '[.[] | select(.name == $n)][0] // empty' 2>/dev/null)
+  if [ -z "$ours" ]; then
+    log "Existing tunnels do not include '$desired_name' - leaving them untouched."
+    return 0
+  fi
+
+  local our_id our_conns
+  our_id=$(echo "$ours" | jq -r '.id // empty' 2>/dev/null)
+  our_conns=$(echo "$ours" | jq -r '.connections // 0' 2>/dev/null)
+
+  if [ -n "$our_id" ] && [ -n "${CF_TUNNEL_ID:-}" ] && [ "$CF_TUNNEL_ID" = "$our_id" ]; then
+    log "Stored tunnel $our_id still exists and matches - reusing it."
     return 0
   fi
   if [ -f "$CF_CREDS_FILE" ]; then
-    log "Stored credentials reference a deleted tunnel - ignoring them."
+    log "Stored credentials reference a different/deleted tunnel - ignoring them."
   fi
 
-  policy=${CF_EXISTING:-}
+  local policy=${CF_EXISTING:-} action
   if [ -z "$policy" ]; then
-    if [ -t 0 ] || [ -e /dev/tty ]; then
+    if [ "${our_conns:-0}" -eq 0 ]; then
+      policy=replace
+      log "Tunnel '$desired_name' exists but has NO active connectors (old server offline) - replacing it automatically."
+    elif tty_available; then
       action=$(cf_ask_policy)
     else
       policy=reuse
-      log "Non-interactive run with existing tunnels - defaulting to CF_EXISTING=reuse."
+      log "Non-interactive run and tunnel '$desired_name' is live - defaulting to CF_EXISTING=reuse."
     fi
   else
     action=$policy
   fi
+  action=${action:-$policy}
 
   case "$action" in
     reuse)
-      local first
-      first=$(echo "$CF_EXISTING_LIST" | jq -r '[.[] | select(.status != "deactivated")][0].id // .[0].id' 2>/dev/null)
-      [ -n "$first" ] || first=$(echo "$ids" | head -1)
-      log "Adopting existing tunnel $first..."
-      if cf_fetch_tunnel_token "$first"; then
+      log "Adopting existing tunnel $our_id..."
+      if cf_fetch_tunnel_token "$our_id"; then
         cf_write_creds_file
         log "Tunnel adopted: $CF_TUNNEL_ID"
         return 0
       fi
-      log_err "Could not obtain credentials for tunnel $first (deleted mid-run or token lacks Tunnel Edit)."
+      log_err "Could not obtain credentials for tunnel $our_id (deleted mid-run or token lacks Tunnel Edit)."
       return 1
       ;;
     replace|clean)
-      local tid
-      for tid in $ids; do
-        log "Deleting old tunnel $tid..."
-        cf_api DELETE "/accounts/$CF_ACCOUNT_ID/cfd_tunnel/$tid"
-        if ! cf_success; then
-          log "Delete failed - retrying with cascade cleanup..."
-          cf_api DELETE "/accounts/$CF_ACCOUNT_ID/cfd_tunnel/$tid?cascade=true"
-        fi
-        cf_success || log_err "Tunnel $tid could not be removed (active connector elsewhere?). Continuing."
-      done
-      cf_delete_managed_dns "" no
+      log "Deleting old tunnel $our_id..."
+      cf_api DELETE "/accounts/$CF_ACCOUNT_ID/cfd_tunnel/$our_id"
+      if ! cf_success; then
+        log "Delete failed - retrying with cascade cleanup..."
+        cf_api DELETE "/accounts/$CF_ACCOUNT_ID/cfd_tunnel/$our_id?cascade=true"
+      fi
+      cf_success || log_err "Tunnel $our_id could not be removed (active connector elsewhere?). Continuing."
+      cf_delete_managed_dns "$our_id" no
       if [ "$action" = "clean" ]; then
-        cf_delete_managed_dns "" yes
+        cf_delete_managed_dns "$our_id" yes
       fi
       CF_TUNNEL_ID=""
       rm -f "$CF_CREDS_FILE" "$CF_CFG_FILE"

@@ -11,18 +11,23 @@ DOMAIN=example.com
 #   Account: Cloudflare Tunnel - Edit
 #   Zone:    Zone - Read, DNS - Edit, SSL and Certificates - Edit
 # Create at https://dash.cloudflare.com/profile/api-tokens
+# (the installer double-checks the token length so paste glitches get caught)
 CF_API_TOKEN=
 
 # Optional: if your token cannot list accounts, paste your Account ID
 # (https://dash.cloudflare.com -> right sidebar -> Account ID)
 CF_ACCOUNT_ID=
 
-# What to do when an existing Pelican tunnel/DNS from a previous install is
-# found on this account (interactive runs show a prompt instead):
-#   reuse   = adopt the existing tunnel (recommended when replacing a server)
-#   replace = delete old tunnel + its DNS records, create fresh
-#   clean   = additionally remove managed game/SFTP A records
-CF_EXISTING=reuse
+# What to do when a tunnel named pelican-<domain> already exists on this
+# account (e.g. from a previous install or another server):
+#   (unset)  = automatic (recommended): if the existing tunnel has NO active
+#              connectors (old server offline) it is replaced automatically;
+#              if it is live you are asked interactively (reuse/replace/clean/abort)
+#   reuse    = always adopt the existing tunnel (old server still running)
+#   replace  = always delete the old tunnel + its DNS records, create fresh
+#   clean    = additionally remove managed game/SFTP A records
+# Tunnels with other names are never touched.
+CF_EXISTING=
 
 TIMEZONE=UTC
 

@@ -71,6 +71,8 @@ panel_phase() {
   mysql -e "CREATE DATABASE IF NOT EXISTS pelican CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;" 2>>"$INSTALL_LOG"
   mysql -e "CREATE USER IF NOT EXISTS 'pelican'@'127.0.0.1' IDENTIFIED BY '$db_password';" 2>>"$INSTALL_LOG"
   mysql -e "CREATE USER IF NOT EXISTS 'pelican'@'localhost' IDENTIFIED BY '$db_password';" 2>>"$INSTALL_LOG"
+  mysql -e "ALTER USER 'pelican'@'127.0.0.1' IDENTIFIED BY '$db_password';" 2>>"$INSTALL_LOG"
+  mysql -e "ALTER USER 'pelican'@'localhost' IDENTIFIED BY '$db_password';" 2>>"$INSTALL_LOG"
   mysql -e "GRANT ALL PRIVILEGES ON pelican.* TO 'pelican'@'127.0.0.1';" 2>>"$INSTALL_LOG"
   mysql -e "GRANT ALL PRIVILEGES ON pelican.* TO 'pelican'@'localhost';" 2>>"$INSTALL_LOG"
   mysql -e "FLUSH PRIVILEGES;" 2>>"$INSTALL_LOG"
@@ -247,6 +249,7 @@ admin_phase() {
   count=$(mysql -N -B -e "SELECT COUNT(*) FROM pelican.users;" 2>/dev/null || echo 0)
   if [ "${count:-0}" -ge 1 ] 2>/dev/null; then
     log "Admin account already exists."
+    sed -i 's/^APP_INSTALLED=.*/APP_INSTALLED=true/' "$PANEL_DIR/.env" 2>/dev/null || true
     return 0
   fi
 

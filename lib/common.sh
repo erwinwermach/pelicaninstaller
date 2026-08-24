@@ -118,13 +118,21 @@ random_hex() {
   openssl rand -hex "$1" 2>/dev/null || head -c "$(( $1 * 2 ))" /dev/urandom | od -An -tx1 | tr -d ' \n' | cut -c1-$(( $1 * 2 ))
 }
 
+tty_available() {
+  [ -t 0 ] && return 0
+  ( exec < /dev/tty ) 2>/dev/null && return 0
+  return 1
+}
+
 tty_read() {
   local var=$1 label=$2 default=$3
   local val=""
-  if [ -t 0 ]; then
-    read -r -p "$label" val
-  elif [ -e /dev/tty ]; then
-    read -r -p "$label" val < /dev/tty
+  if tty_available; then
+    if [ -t 0 ]; then
+      read -r -p "$label" val
+    else
+      read -r -p "$label" val < /dev/tty
+    fi
   else
     return 1
   fi
@@ -135,10 +143,12 @@ tty_read() {
 tty_secret() {
   local var=$1 label=$2
   local val=""
-  if [ -t 0 ]; then
-    read -r -s -p "$label" val
-  elif [ -e /dev/tty ]; then
-    read -r -s -p "$label" val < /dev/tty
+  if tty_available; then
+    if [ -t 0 ]; then
+      read -r -s -p "$label" val
+    else
+      read -r -s -p "$label" val < /dev/tty
+    fi
   else
     return 1
   fi

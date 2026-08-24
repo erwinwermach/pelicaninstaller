@@ -45,6 +45,13 @@ collect_config() {
 
   tty_secret CF_API_TOKEN "Cloudflare API token (hidden): "
   [ -n "${CF_API_TOKEN:-}" ] || die "A Cloudflare API token is required. Create one at https://dash.cloudflare.com/profile/api-tokens"
+  if [ "${#CF_API_TOKEN}" -lt 20 ]; then
+    log_err "Cloudflare API token looks too short (${#CF_API_TOKEN} chars) - possible paste glitch. Try again."
+    tty_secret CF_API_TOKEN "Cloudflare API token (hidden): "
+    [ -n "${CF_API_TOKEN:-}" ] || die "A Cloudflare API token is required."
+    [ "${#CF_API_TOKEN}" -ge 20 ] || die "Cloudflare API token still too short (${#CF_API_TOKEN} chars). Paste the full token and re-run."
+  fi
+  echo ""
 
   tty_read TIMEZONE "Timezone [$default_tz]: " "$default_tz"
   TIMEZONE=${TIMEZONE:-$default_tz}

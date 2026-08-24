@@ -22,8 +22,8 @@ wipe_phase() {
 
   log "Removing leftover data and config directories..."
   rm -rf /var/www/pelican /var/www/pterodactyl \
-    /etc/pelican /etc/cloudflared /etc/nginx /etc/apache2 /etc/php \
-    /var/lib/mysql /var/lib/docker /var/lib/redis /var/cache/nginx \
+    /etc/pelican /etc/cloudflared /etc/nginx /etc/apache2 /etc/php /etc/mysql \
+    /var/lib/mysql /var/lib/mariadb /var/lib/docker /var/lib/redis /var/cache/nginx \
     /var/log/nginx /etc/letsencrypt /root/.acme.sh \
     /var/lib/pelican /var/run/wings \
     /usr/local/bin/bore /usr/local/bin/frpc /opt/frp /etc/frps.toml \

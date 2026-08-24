@@ -57,9 +57,15 @@ curl -fsSL https://raw.githubusercontent.com/erwinwermach/pelicaninstaller/main/
 ```
 
 If the installer finds an existing Pelican tunnel/DNS from an earlier install
-(e.g. you moved to new hardware), it shows what it found and asks:
-**R** reuse it · **F** replace it fresh · **W** wipe all managed resources ·
-**A** abort. Unattended default: reuse (`CF_EXISTING=reuse|replace|clean`).
+(e.g. you moved to new hardware), it checks whether that tunnel still has live
+connectors:
+- **offline (no connectors)** → the old tunnel and its DNS records are deleted
+  and a fresh one is created **automatically** — you don't have to do anything
+  to take over from a dead server.
+- **live (another server still running it)** → you are asked:
+  **R** reuse it · **F** replace it · **W** wipe all managed resources ·
+  **A** abort. Unattended runs default to reuse (`CF_EXISTING=reuse|replace|clean`
+  to force a policy; tunnels with other names are never touched).
 
 ### After install
 - Log in at `https://panel.yourdomain.com` — admin credentials are in
