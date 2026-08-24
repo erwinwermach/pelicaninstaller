@@ -4,6 +4,11 @@ set -euo pipefail
 REPO_URL="${PELICAN_REPO_URL:-https://github.com/erwinwermach/pelicaninstaller/archive/refs/heads/main.tar.gz}"
 
 DST=/opt/pelican-installer
+
+if [ -x "$DST/installer.sh" ] && bash -n "$DST/installer.sh" 2>/dev/null; then
+  exec bash "$DST/installer.sh" "$@"
+fi
+
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 

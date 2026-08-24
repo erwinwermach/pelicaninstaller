@@ -38,6 +38,11 @@ EOF
 }
 
 collect_config() {
+  if ! tty_available; then
+    echo "No interactive terminal available for the setup questions." >&2
+    echo "Pre-fill the config file (see installer.conf.example) and re-run with: --config /path/to/installer.conf" >&2
+    exit 1
+  fi
   local default_tz="UTC"
   if command -v timedatectl >/dev/null 2>&1; then
     default_tz=$(timedatectl show --property=Timezone --value 2>/dev/null || echo "UTC")
@@ -275,9 +280,11 @@ fi
 # configs (e.g. a corrupted CF token) can never survive into the next run.
 if [ "$SKIP_WIPE" = "0" ]; then
   wipe_peek=""
-  [ -f "$CONF_FILE" ] && wipe_peek=$(grep -E '^WIPE_FIRST=' "$CONF_FILE" 2>/dev/null | tail -1 | cut -d= -f2-)
+  if [ -f "$CONF_FILE" ]; then
+    wipe_peek=$(grep -E '^WIPE_FIRST=' "$CONF_FILE" 2>/dev/null | tail -1 | cut -d= -f2- || true)
+  fi
   if [ -z "$wipe_peek" ] && [ -n "${CONF_FILE_ARG:-}" ] && [ -f "$CONF_FILE_ARG" ]; then
-    wipe_peek=$(grep -E '^WIPE_FIRST=' "$CONF_FILE_ARG" 2>/dev/null | tail -1 | cut -d= -f2-)
+    wipe_peek=$(grep -E '^WIPE_FIRST=' "$CONF_FILE_ARG" 2>/dev/null | tail -1 | cut -d= -f2- || true)
   fi
   case "$wipe_peek" in
     no)
@@ -312,7 +319,7 @@ if [ "$SKIP_WIPE" = "0" ]; then
     log_err "Could not download the installer tarball - aborting the reset, nothing was wiped."
     exit 1
   fi
-  reset_srcdir=$(find "$reset_tmp" -maxdepth 2 -name installer.sh -printf '%h' -quit 2>/dev/null)
+  reset_srcdir=$(find "$reset_tmp" -maxdepth 2 -name installer.sh -printf '%h' -quit 2>/dev/null || true)
   if [ -z "$reset_srcdir" ]; then
     rm -rf "$reset_tmp"
     log_err "Downloaded tarball is invalid (installer.sh missing) - aborting the reset, nothing was wiped."
