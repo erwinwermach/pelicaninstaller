@@ -8,10 +8,10 @@ wipe_phase() {
     systemctl stop "$svc" >/dev/null 2>&1 || true
     systemctl disable "$svc" >/dev/null 2>&1 || true
   done
-  systemctl list-unit-files 'bore@*.service' 2>/dev/null | awk '/^bore@/ {print $1}' | while read -r u; do
+  while read -r u; do
     systemctl disable --now "$u" >/dev/null 2>&1 || true
     rm -f "/etc/systemd/system/$u"
-  done
+  done < <(systemctl list-unit-files 'bore@*.service' 2>/dev/null | awk '/^bore@/ {print $1}') || true
 
   log "Purging conflicting packages..."
   local purge_list
@@ -36,4 +36,5 @@ wipe_phase() {
   DEBIAN_FRONTEND=noninteractive apt-get autoremove --purge -y >/dev/null 2>&1 || true
   apt-get clean >/dev/null 2>&1 || true
   log "Clean slate ready."
+  return 0
 }

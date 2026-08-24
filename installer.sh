@@ -328,14 +328,18 @@ if [ "$SKIP_WIPE" = "0" ]; then
 
   log "Wiping all installer-managed data and installer state..."
   . "$SCRIPT_DIR/lib/wipe.sh"
+  set +e
   wipe_phase
+  set -e
   rm -rf "$PI_ROOT" /var/log/pelican /run/pelican-node-attempt
   crontab -u www-data -r >/dev/null 2>&1 || true
 
   log "Replacing the installer with the fresh GitHub copy..."
+  rm -rf /opt/pelican-installer.new
+  mkdir -p /opt/pelican-installer.new
+  cp -rf "$reset_srcdir/." /opt/pelican-installer.new/
   rm -rf /opt/pelican-installer
-  mkdir -p /opt/pelican-installer
-  cp -rf "$reset_srcdir/." /opt/pelican-installer/
+  mv -f /opt/pelican-installer.new /opt/pelican-installer
   chmod +x /opt/pelican-installer/bin/*.sh 2>/dev/null || true
   rm -rf "$reset_tmp"
 
