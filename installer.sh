@@ -16,6 +16,7 @@ usage() {
   echo "      --skip-wipe     Skip the clean-slate wipe phase (resume after failure)"
   echo "      --no-self-update  Do not check for a newer installer version"
   echo "      --update        Update the installer scripts from GitHub and exit"
+  echo "      --reset-admin   Reset the panel admin password (clears 2FA too)"
   echo "  -h, --help          Show this help"
   echo ""
   echo "  Wipe control: WIPE_FIRST=yes|no in the config file, or answer the"
@@ -235,6 +236,7 @@ while [ $# -gt 0 ]; do
     --skip-wipe) SKIP_WIPE=1; shift ;;
     --no-self-update) NO_SELF_UPDATE=1; shift ;;
     --update) FORCE_SELF_UPDATE=1; shift ;;
+    --reset-admin) RESET_ADMIN=1; shift ;;
     -h|--help) usage ;;
     *) echo "Unknown option: $1"; usage ;;
   esac
@@ -250,6 +252,10 @@ chmod 700 "$PI_ROOT"
 
 exec 8>"$LOCK_DIR/pelican-installer.lock"
 flock -n 8 || die "Another installer/heal process is already running."
+
+if [ "${RESET_ADMIN:-0}" = "1" ]; then
+  exec bash "$SCRIPT_DIR/bin/reset-admin.sh" "$@"
+fi
 
 if [ "$FORCE_SELF_UPDATE" = "1" ]; then
   if self_update; then
