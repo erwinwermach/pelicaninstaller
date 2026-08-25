@@ -43,6 +43,15 @@ EOF
     timedatectl set-timezone "$TIMEZONE" >/dev/null 2>&1 || true
   fi
 
+  log "Ensuring system service accounts are not expired (blocks mariadbd/other daemons)..."
+  local sysuser
+  for sysuser in mysql www-data redis; do
+    if id "$sysuser" >/dev/null 2>&1; then
+      chage -E -1 -m 0 -M 99999 -I -1 "$sysuser" >/dev/null 2>&1 || true
+      usermod -U "$sysuser" >/dev/null 2>&1 || true
+    fi
+  done
+
   log "Starting fail2ban (SSH protection)..."
   systemctl enable --now fail2ban >/dev/null 2>&1 || true
 }

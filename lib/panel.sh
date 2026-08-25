@@ -54,6 +54,12 @@ panel_phase() {
   apt-get install -y mariadb-server mariadb-client redis-server nginx >>"$INSTALL_LOG" 2>&1 \
     || die "Failed to install database/webserver packages."
 
+  log "Ensuring the mysql system account is usable (expired accounts block mariadbd startup)..."
+  if id mysql >/dev/null 2>&1; then
+    chage -E -1 -m 0 -M 99999 -I -1 mysql >/dev/null 2>&1 || true
+    usermod -U mysql >/dev/null 2>&1 || true
+  fi
+
   log "Starting services..."
   ensure_service mariadb 3 || die "MariaDB failed to start."
   ensure_service redis-server 3 || die "Redis failed to start."
