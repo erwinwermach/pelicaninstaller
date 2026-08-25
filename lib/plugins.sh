@@ -38,6 +38,29 @@ EOF
   fi
 }
 
+plugins_reconcile() {
+  # Re-enable configured plugins that ended up disabled (idempotent, heal-safe).
+  # Pelican has NO p:plugin:enable CLI command - enable state lives in
+  # plugins/<id>/plugin.json meta and is toggled via the app API only.
+  ensure_app_api_key || return 0
+  local name
+  while IFS='|' read -r name _url; do
+    [ -n "$name" ] || continue
+    app_api GET "/plugins/$name"
+    [ "$APP_CODE" = "200" ] || continue
+    if echo "$APP_RESP" | grep -qE '"status"[^,]*disabled'; then
+      app_api POST "/plugins/$name/enable"
+      if [ "$APP_CODE" = "200" ] || [ "$APP_CODE" = "204" ]; then
+        log "Re-enabled plugin '$name'."
+      else
+        log_err "Could not re-enable plugin '$name' (HTTP $APP_CODE): $APP_RESP"
+      fi
+    fi
+  done <<EOF
+$(plugins_selected)
+EOF
+}
+
 plugins_phase() {
   banner "Phase 11 - Panel plugins ($PANEL_PLUGINS)"
   ensure_service pelican-queue 5 || log_err "Queue worker not running - plugin installs will wait in the queue."
