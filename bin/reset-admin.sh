@@ -35,16 +35,24 @@ echo "Resetting Pelican admin access..."
 cd "$PANEL_DIR" || exit 1
 
 TINKER_OUT=$(COMPOSER_ALLOW_SUPERUSER=1 "$PHP_BIN" artisan tinker --execute="
+use Spatie\Permission\Models\Permission;
 try {
-    \$role = \App\Models\Role::where('name', \App\Models\Role::ROOT_ADMIN)->first();
+    \$role = \App\Models\Role::getRootAdmin();
+    \$perms = [];
+    foreach (\App\Models\Role::getPermissionList() as \$model => \$prefixes) {
+        foreach (\$prefixes as \$prefix) {
+            \$perms[] = Permission::findOrCreate(\$prefix . ' ' . \$model, 'web')->name;
+        }
+    }
+    \$role->syncPermissions(\$perms);
     \$user = \App\Models\User::where('username', '$NEW_USER')->first()
           ?? \App\Models\User::where('email', '$NEW_EMAIL')->first()
           ?? \App\Models\User::first();
     if (\$user) {
         \$user->forceFill(['password' => \Illuminate\Support\Facades\Hash::make('$NEW_PASS')])->save();
-        if (\$role && !\$user->hasRole(\$role)) { \$user->assignRole(\$role); }
+        if (!\$user->hasRole(\$role)) { \$user->assignRole(\$role); }
         \$user->update(['mfa_app_secret' => null, 'mfa_app_recovery_codes' => null, 'mfa_email_enabled' => false]);
-        echo 'RESET_OK username=' . \$user->username . ' email=' . \$user->email . ' admin=' . (\$user->isRootAdmin() ? 'yes' : 'no') . PHP_EOL;
+        echo 'RESET_OK username=' . \$user->username . ' email=' . \$user->email . ' admin=' . (\$user->isRootAdmin() ? 'yes' : 'no') . ' perms=' . \$role->permissions()->count() . PHP_EOL;
     } else {
         echo 'NO_USER' . PHP_EOL;
     }

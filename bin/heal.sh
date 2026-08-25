@@ -125,6 +125,28 @@ fi
 . "$HEAL_DIR/lib/node.sh"
 ensure_node
 
+# Reconcile admin permissions + extra eggs (idempotent, throttled to once/hour)
+if [ ! -f "$PI_ROOT/.panel-reconciled" ] || [ $(($(date +%s) - $(stat -c %Y "$PI_ROOT/.panel-reconciled" 2>/dev/null || echo 0))) -gt 3600 ]; then
+  if panel_admin_exists && [ -f "$PANEL_DIR/.env" ] && grep -q '^APP_INSTALLED=true' "$PANEL_DIR/.env"; then
+    PHP_BIN="php$(panel_php_version)"
+    (cd "$PANEL_DIR" && COMPOSER_ALLOW_SUPERUSER=1 "$PHP_BIN" artisan tinker --execute="
+use Spatie\Permission\Models\Permission;
+\$role = \App\Models\Role::getRootAdmin();
+\$perms = [];
+foreach (\App\Models\Role::getPermissionList() as \$model => \$prefixes) {
+    foreach (\$prefixes as \$prefix) {
+        \$perms[] = Permission::findOrCreate(\$prefix . ' ' . \$model, 'web')->name;
+    }
+}
+\$role->syncPermissions(\$perms);
+" >/dev/null 2>&1) || true
+    # shellcheck source=../lib/eggs.sh
+    . "$HEAL_DIR/lib/eggs.sh"
+    ensure_app_api_key >/dev/null 2>&1 && eggs_phase >/dev/null 2>&1 || true
+    touch "$PI_ROOT/.panel-reconciled" 2>/dev/null || true
+  fi
+fi
+
 # shellcheck source=../lib/routing.sh
 . "$HEAL_DIR/lib/routing.sh"
 if [ "$GAME_ROUTING" != "none" ]; then

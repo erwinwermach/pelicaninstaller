@@ -119,7 +119,7 @@ validate_config() {
   TIMEZONE=${TIMEZONE:-UTC}
   AUTO_REBOOT=${AUTO_REBOOT:-yes}
   WIPE_FIRST=${WIPE_FIRST:-}
-  AUTO_ADMIN=${AUTO_ADMIN:-no}
+  AUTO_ADMIN=${AUTO_ADMIN:-yes}
 
   [ -n "$DOMAIN" ] || die "DOMAIN is not set in $CONF_FILE"
   [ -n "$CF_API_TOKEN" ] || die "CF_API_TOKEN is not set in $CONF_FILE"

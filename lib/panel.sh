@@ -304,8 +304,8 @@ EOF
 }
 
 admin_phase() {
-  banner "Phase 4 - Admin account (user-driven setup wizard)"
-  if [ "${AUTO_ADMIN:-no}" = "yes" ]; then
+  banner "Phase 4 - Admin account"
+  if [ "${AUTO_ADMIN:-yes}" = "yes" ]; then
     auto_admin_create
     return $?
   fi
@@ -324,25 +324,55 @@ admin_phase() {
   echo "  SETUP REQUIRED - open this URL and follow the wizard:"
   echo "    https://$PANEL_FQDN/installer"
   echo "  The wizard sets up the database, creates your admin"
-  echo "  account and lets you pick eggs. Wait for it to finish"
-  echo "  before continuing (the installer waits here)."
+  echo "  account and lets you pick eggs."
   echo "  =========================================================="
   echo ""
-  log "Waiting for the setup wizard to finish (up to 10 minutes)..."
-  local waited=0
-  while [ "$waited" -lt 600 ]; do
-    count=$(mysql -N -B -e "SELECT COUNT(*) FROM pelican.users;" 2>/dev/null || echo 0)
-    if [ "${count:-0}" -ge 1 ] 2>/dev/null; then
-      if grep -q '^APP_INSTALLED=true' "$PANEL_DIR/.env" 2>/dev/null; then
-        log "Setup wizard completed (admin account + APP_INSTALLED=true)."
-        return 0
+  if tty_available; then
+    local answer=""
+    tty_read answer "Type 'done' (or just press Enter) once the wizard is finished: " ""
+    log "Continuing after setup wizard."
+  else
+    log "Non-interactive run - polling for wizard completion (up to 10 minutes)..."
+    local waited=0
+    while [ "$waited" -lt 600 ]; do
+      count=$(mysql -N -B -e "SELECT COUNT(*) FROM pelican.users;" 2>/dev/null || echo 0)
+      if [ "${count:-0}" -ge 1 ] 2>/dev/null; then
+        if grep -q '^APP_INSTALLED=true' "$PANEL_DIR/.env" 2>/dev/null; then
+          log "Setup wizard completed."
+          return 0
+        fi
       fi
-    fi
-    sleep 10
-    waited=$((waited + 10))
-  done
-  log_err "Timed out waiting for the setup wizard. Complete it at https://$PANEL_FQDN/installer then re-run the installer to resume."
+      sleep 10
+      waited=$((waited + 10))
+    done
+    log_err "Timed out waiting for the setup wizard. Complete it at https://$PANEL_FQDN/installer then re-run the installer to resume."
+  fi
+  panel_db_guard
   return 0
+}
+
+panel_db_guard() {
+  if [ -f "$PANEL_DIR/.env" ] && grep -q '^DB_CONNECTION=sqlite' "$PANEL_DIR/.env" 2>/dev/null; then
+    log "Setup wizard switched the panel database to SQLite - restoring MariaDB (required by the host watchdog)..."
+    local db_password
+    db_password=${DB_PASSWORD:-$(random_hex 16)}
+    mysql -e "CREATE USER IF NOT EXISTS 'pelican'@'127.0.0.1' IDENTIFIED BY '$db_password';" 2>>"$INSTALL_LOG"
+    mysql -e "ALTER USER 'pelican'@'127.0.0.1' IDENTIFIED BY '$db_password';" 2>>"$INSTALL_LOG"
+    mysql -e "GRANT ALL PRIVILEGES ON pelican.* TO 'pelican'@'127.0.0.1';" 2>>"$INSTALL_LOG"
+    mysql -e "FLUSH PRIVILEGES;" 2>>"$INSTALL_LOG"
+    sed -i 's/^DB_CONNECTION=.*/DB_CONNECTION=mysql/' "$PANEL_DIR/.env"
+    sed -i 's|^DB_DATABASE=.*|DB_DATABASE=pelican|' "$PANEL_DIR/.env"
+    sed -i 's/^DB_HOST=.*/DB_HOST=127.0.0.1/' "$PANEL_DIR/.env"
+    sed -i 's/^DB_PORT=.*/DB_PORT=3306/' "$PANEL_DIR/.env"
+    sed -i 's/^DB_USERNAME=.*/DB_USERNAME=pelican/' "$PANEL_DIR/.env"
+    sed -i "s/^DB_PASSWORD=.*/DB_PASSWORD=$db_password/" "$PANEL_DIR/.env"
+    chown www-data:www-data "$PANEL_DIR/.env"
+    mkdir -p "$PI_ROOT"
+    echo "DB_PASSWORD=$db_password" > "$SECRETS_FILE"
+    chmod 600 "$SECRETS_FILE"
+    (cd "$PANEL_DIR" && php artisan migrate --seed --force) >>"$INSTALL_LOG" 2>&1 || true
+    log "Panel database restored to MariaDB."
+  fi
 }
 
 auto_admin_create() {
@@ -372,7 +402,21 @@ auto_admin_create() {
       echo "ADMIN_PASSWORD=$admin_pass"
     } >> "$SECRETS_FILE"
     chmod 600 "$SECRETS_FILE"
-    log "Panel installation completed via CLI."
+    log "Syncing all permissions to the Root Admin role (required for admin navigation)..."
+  (cd "$PANEL_DIR" && php artisan tinker --execute="
+use Spatie\Permission\Models\Permission;
+\$role = \App\Models\Role::getRootAdmin();
+\$perms = [];
+foreach (\App\Models\Role::getPermissionList() as \$model => \$prefixes) {
+    foreach (\$prefixes as \$prefix) {
+        \$perms[] = Permission::findOrCreate(\$prefix . ' ' . \$model, 'web')->name;
+    }
+}
+\$role->syncPermissions(\$perms);
+echo 'perms=' . \$role->permissions()->count() . PHP_EOL;
+" 2>&1 | grep -E 'perms=' | tail -1 >>"$INSTALL_LOG" || true)
+
+  log "Panel installation completed via CLI."
     echo ""
     echo "  ADMIN LOGIN:"
     echo "    URL:      https://$PANEL_FQDN"

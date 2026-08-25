@@ -101,13 +101,9 @@ connectors:
   to force a policy; tunnels with other names are never touched).
 
 ### After install
-- **Complete the setup wizard** at `https://panel.yourdomain.com/installer` —
-  it walks you through database/queue checks, creates your admin account, and
-  lets you **pick eggs to install** (that's why the panel is fully populated
-  afterwards). The installer waits for you to finish this step before
-  continuing, so everything (node bootstrap, plugins, routing) is ready when
-  the wizard completes. (Set `AUTO_ADMIN=yes` in the config to have the
-  installer create the admin automatically instead.)
+- Everything is automatic: the installer creates the admin account (via CLI,
+  with Pelican's recommended options) and prints the login right here in the
+  SSH window when it's done. No web wizard needed.
 - Create a game server → open its **Connections** page: public addresses for
   each allocation appear automatically within ~10 minutes (watchdog syncs).
   The console widget shows them too. Players join those addresses.
@@ -116,6 +112,9 @@ connectors:
   startup flags sized to the server's memory limit — **nothing is applied
   automatically**, review and click *Apply* (one-click revert included).
 - HTTP apps: set `CF_APP_ROUTING=yes`, re-run the installer.
+- Optional: set `AUTO_ADMIN=no` in the config to use the panel's web setup
+  wizard instead (`https://panel.yourdomain.com/installer`); the installer
+  then waits — type **done** / press Enter once the wizard is finished.
 
 ## Included panel plugins (installed automatically)
 
