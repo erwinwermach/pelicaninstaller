@@ -124,7 +124,7 @@ panel_optimize() {
 add_static_caching() {
   local conf=/etc/nginx/sites-available/pelican.conf
   [ -f "$conf" ] || return 0
-  grep -q 'location /js/' "$conf" && return 0
+  grep -qE 'location ~\* \^/\(js\|css\|vendor\|fonts\)/' "$conf" && return 0
   local tmp
   tmp=$(mktemp)
   awk '
@@ -133,7 +133,7 @@ add_static_caching() {
       print "        expires 7d;";
       print "        add_header Cache-Control \"public, immutable\";";
       print "        access_log off;";
-      print "        try_files \\$uri =404;";
+      print "        try_files $uri =404;";
       print "    }";
       print "";
       inserted = 1;
