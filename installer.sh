@@ -119,6 +119,7 @@ validate_config() {
   TIMEZONE=${TIMEZONE:-UTC}
   AUTO_REBOOT=${AUTO_REBOOT:-yes}
   WIPE_FIRST=${WIPE_FIRST:-}
+  AUTO_ADMIN=${AUTO_ADMIN:-no}
 
   [ -n "$DOMAIN" ] || die "DOMAIN is not set in $CONF_FILE"
   [ -n "$CF_API_TOKEN" ] || die "CF_API_TOKEN is not set in $CONF_FILE"
@@ -192,15 +193,31 @@ finish_install() {
     none)   echo "  Game ports: no automatic routing configured" ;;
   esac
   echo ""
-  echo "  Admin login: username 'admin' - see $SECRETS_FILE for the password"
+  if [ "${AUTO_ADMIN:-no}" = "yes" ]; then
+    echo "  Admin login: username 'admin' - see $SECRETS_FILE for the password"
+  else
+    echo "  Admin setup: open https://$PANEL_FQDN/installer and complete the wizard"
+    echo "               (creates your admin account + optional eggs)"
+  fi
   echo "  Logs:   /var/log/pelican/   (install.log, heal.log, update.log)"
   echo "  Config: $CONF_FILE"
   echo ""
   log "Panel is reachable at https://$PANEL_FQDN"
 
   if [ "$AUTO_REBOOT" = "yes" ] || [ "$AUTO_REBOOT" = "true" ]; then
-    log "Rebooting in 15 seconds to verify the self-heal system (services, tunnel, DNS and Wings will all come back automatically)."
-    nohup sh -c 'sleep 15; reboot' >/dev/null 2>&1 &
+    local admin_done=1
+    if [ "${AUTO_ADMIN:-no}" != "yes" ]; then
+      count=$(mysql -N -B -e "SELECT COUNT(*) FROM pelican.users;" 2>/dev/null || echo 0)
+      [ "${count:-0}" -ge 1 ] 2>/dev/null || admin_done=0
+    fi
+    if [ "$admin_done" = "1" ]; then
+      log "Rebooting in 15 seconds to verify the self-heal system (services, tunnel, DNS and Wings will all come back automatically)."
+      nohup sh -c 'sleep 15; reboot' >/dev/null 2>&1 &
+    else
+      echo "  Finish the setup wizard at https://$PANEL_FQDN/installer, then reboot:"
+      echo "  sudo reboot"
+      log "Auto-reboot deferred until the setup wizard is completed."
+    fi
   else
     echo "Reboot manually when ready: sudo reboot"
   fi
@@ -409,11 +426,11 @@ mkdir -p "$STAGES_DIR"
 run_phase wipe wipe_phase
 run_phase base base_phase
 run_phase panel panel_phase
-run_phase admin admin_phase
 run_phase egg-images egg_images_phase
 run_phase cloudflare cloudflare_phase
 run_phase wings wings_phase
 run_phase nginx-enable nginx_enable_phase
+run_phase admin admin_phase
 run_phase tune tune_phase
 run_phase queue queue_phase
 run_phase plugins plugins_phase

@@ -69,6 +69,14 @@ NODE_CPU=100
 # Reboot the server automatically after install (verifies self-healing)
 AUTO_REBOOT=yes
 
+# Who creates the admin account?
+#   no  (default) = you complete the panel's web setup wizard at
+#                   https://panel.yourdomain.com/installer (recommended -
+#                   it also lets you pick eggs during setup)
+#   yes           = the installer creates 'admin' via CLI automatically
+#                   (credentials in /etc/pelican-installer/secrets.env)
+AUTO_ADMIN=no
+
 # Clean-slate reset before installing?
 #   (unset) = ask once during interactive installs; non-interactive runs skip
 #             the reset when an install is already in progress (resume), and

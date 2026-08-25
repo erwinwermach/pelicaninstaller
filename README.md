@@ -101,8 +101,13 @@ connectors:
   to force a policy; tunnels with other names are never touched).
 
 ### After install
-- Log in at `https://panel.yourdomain.com` — admin credentials are in
-  `/etc/pelican-installer/secrets.env`; change the password after login.
+- **Complete the setup wizard** at `https://panel.yourdomain.com/installer` —
+  it walks you through database/queue checks, creates your admin account, and
+  lets you **pick eggs to install** (that's why the panel is fully populated
+  afterwards). The installer waits for you to finish this step before
+  continuing, so everything (node bootstrap, plugins, routing) is ready when
+  the wizard completes. (Set `AUTO_ADMIN=yes` in the config to have the
+  installer create the admin automatically instead.)
 - Create a game server → open its **Connections** page: public addresses for
   each allocation appear automatically within ~10 minutes (watchdog syncs).
   The console widget shows them too. Players join those addresses.

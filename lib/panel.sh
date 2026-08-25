@@ -304,7 +304,48 @@ EOF
 }
 
 admin_phase() {
-  banner "Phase 4 - Admin account"
+  banner "Phase 4 - Admin account (user-driven setup wizard)"
+  if [ "${AUTO_ADMIN:-no}" = "yes" ]; then
+    auto_admin_create
+    return $?
+  fi
+
+  local count
+  count=$(mysql -N -B -e "SELECT COUNT(*) FROM pelican.users;" 2>/dev/null || echo 0)
+  if [ "${count:-0}" -ge 1 ] 2>/dev/null; then
+    log "Admin account already exists - completing setup."
+    sed -i 's/^APP_INSTALLED=.*/APP_INSTALLED=true/' "$PANEL_DIR/.env" 2>/dev/null || true
+    return 0
+  fi
+
+  log "Panel setup must be completed by you in the browser:"
+  echo ""
+  echo "  =========================================================="
+  echo "  SETUP REQUIRED - open this URL and follow the wizard:"
+  echo "    https://$PANEL_FQDN/installer"
+  echo "  The wizard sets up the database, creates your admin"
+  echo "  account and lets you pick eggs. Wait for it to finish"
+  echo "  before continuing (the installer waits here)."
+  echo "  =========================================================="
+  echo ""
+  log "Waiting for the setup wizard to finish (up to 10 minutes)..."
+  local waited=0
+  while [ "$waited" -lt 600 ]; do
+    count=$(mysql -N -B -e "SELECT COUNT(*) FROM pelican.users;" 2>/dev/null || echo 0)
+    if [ "${count:-0}" -ge 1 ] 2>/dev/null; then
+      if grep -q '^APP_INSTALLED=true' "$PANEL_DIR/.env" 2>/dev/null; then
+        log "Setup wizard completed (admin account + APP_INSTALLED=true)."
+        return 0
+      fi
+    fi
+    sleep 10
+    waited=$((waited + 10))
+  done
+  log_err "Timed out waiting for the setup wizard. Complete it at https://$PANEL_FQDN/installer then re-run the installer to resume."
+  return 0
+}
+
+auto_admin_create() {
   local count
   count=$(mysql -N -B -e "SELECT COUNT(*) FROM pelican.users;" 2>/dev/null || echo 0)
   if [ "${count:-0}" -ge 1 ] 2>/dev/null; then
@@ -318,7 +359,7 @@ admin_phase() {
   admin_user=${ADMIN_USERNAME:-admin}
   admin_pass=$(random_hex 12)
 
-  log "Creating admin account ($admin_user / $admin_email)..."
+  log "Creating admin account via CLI ($admin_user / $admin_email)..."
   (cd "$PANEL_DIR" && php artisan p:user:make --email="$admin_email" --username="$admin_user" \
     --password="$admin_pass" --admin=1 --no-interaction) >>"$INSTALL_LOG" 2>&1 || true
 
