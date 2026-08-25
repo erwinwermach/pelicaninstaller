@@ -380,7 +380,7 @@ cgnat_notice_once() {
     echo "game hostnames would be unreachable and were NOT created."
     echo "Players connect via the configured GAME_ROUTING backend instead"
     echo "(playit.gg by default). SFTP stays reachable over LAN or a VPS tunnel."
-  } | tee -a "$INSTALL_LOG" >&2
+  } | tee -a "$INSTALL_LOG" 2>/dev/null >&2 || true
   mkdir -p "$PI_ROOT"
   touch "$marker"
 }

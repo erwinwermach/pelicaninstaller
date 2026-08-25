@@ -333,15 +333,16 @@ if [ "$SKIP_WIPE" = "0" ]; then
   set -e
   rm -rf "$PI_ROOT" /var/log/pelican /run/pelican-node-attempt
   crontab -u www-data -r >/dev/null 2>&1 || true
+  mkdir -p "$LOG_DIR"
 
   log "Replacing the installer with the fresh GitHub copy..."
-  rm -rf /opt/pelican-installer.new
+  rm -rf /opt/pelican-installer.old /opt/pelican-installer.new
   mkdir -p /opt/pelican-installer.new
   cp -rf "$reset_srcdir/." /opt/pelican-installer.new/
-  rm -rf /opt/pelican-installer
+  mv -f /opt/pelican-installer /opt/pelican-installer.old 2>/dev/null || true
   mv -f /opt/pelican-installer.new /opt/pelican-installer
   chmod +x /opt/pelican-installer/bin/*.sh 2>/dev/null || true
-  rm -rf "$reset_tmp"
+  rm -rf /opt/pelican-installer.old "$reset_tmp"
 
   log "Reset complete - starting a fresh setup."
   exec 8>&-

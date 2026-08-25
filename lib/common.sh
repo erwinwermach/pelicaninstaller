@@ -48,13 +48,15 @@ banner() {
 log() {
   local ts
   ts=$(date '+%Y-%m-%d %H:%M:%S')
-  echo "[$ts] $*" | tee -a "$INSTALL_LOG"
+  mkdir -p "$LOG_DIR" 2>/dev/null || true
+  echo "[$ts] $*" | tee -a "$INSTALL_LOG" 2>/dev/null || true
 }
 
 log_err() {
   local ts
   ts=$(date '+%Y-%m-%d %H:%M:%S')
-  echo "[$ts] ERROR: $*" | tee -a "$INSTALL_LOG" >&2
+  mkdir -p "$LOG_DIR" 2>/dev/null || true
+  echo "[$ts] ERROR: $*" | tee -a "$INSTALL_LOG" 2>/dev/null >&2 || true
 }
 
 die() {
