@@ -458,8 +458,8 @@ panel_patch_navigation() {
   # only registers the Servers resource - so the other 10 route names never
   # exist and Filament drops ALL admin nav items (Servers/Users/Advanced tabs
   # render empty). Fix: force each admin resource's route base to
-  # filament.admin.resources.<name> and stop the app panel from discovering
-  # the conflicting Servers resource.
+  # filament.admin.resources.<name>. Do NOT disable the app panel's resource
+  # discovery - that kills the app home route and causes a redirect loop.
   local php_bin
   php_bin="php$(panel_php_version)"
   local dir="$PANEL_DIR/app/Filament/Admin/Resources"
@@ -499,19 +499,6 @@ PY
       log "Patched admin navigation route for $name."
     fi
   done
-
-  local appprov="$PANEL_DIR/app/Providers/Filament/AppPanelProvider.php"
-  if [ -f "$appprov" ] && grep -q "discoverResources(in: app_path('Filament/App/Resources')" "$appprov"; then
-    python3 - "$appprov" <<'PY'
-import sys
-path = sys.argv[1]
-src = open(path).read()
-old = "            ->discoverResources(in: app_path('Filament/App/Resources'), for: 'App\\\\Filament\\\\App\\\\Resources')\n"
-if old in src:
-    open(path, 'w').write(src.replace(old, ""))
-PY
-    log "Disabled app panel resource discovery (conflicts with admin nav)."
-  fi
 
   (cd "$PANEL_DIR" && COMPOSER_ALLOW_SUPERUSER=1 "$php_bin" artisan optimize:clear) >>"$INSTALL_LOG" 2>&1 || true
   (cd "$PANEL_DIR" && COMPOSER_ALLOW_SUPERUSER=1 "$php_bin" artisan view:clear) >>"$INSTALL_LOG" 2>&1 || true
