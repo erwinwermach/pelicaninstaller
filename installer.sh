@@ -390,6 +390,8 @@ NODE_FQDN="$NODE_SUBDOMAIN.$DOMAIN"
 . "$SCRIPT_DIR/lib/tune.sh"
 # shellcheck source=../lib/plugins.sh
 . "$SCRIPT_DIR/lib/plugins.sh"
+# shellcheck source=../lib/eggs.sh
+. "$SCRIPT_DIR/lib/eggs.sh"
 # shellcheck source=../lib/routing.sh
 . "$SCRIPT_DIR/lib/routing.sh"
 # shellcheck source=../lib/perfctl.sh
@@ -409,6 +411,7 @@ run_phase nginx-enable nginx_enable_phase
 run_phase tune tune_phase
 run_phase queue queue_phase
 run_phase plugins plugins_phase
+run_phase extra-eggs eggs_phase
 run_phase routing routing_phase
 run_phase perfctl perfctl_phase
 run_phase firewall ufw_setup

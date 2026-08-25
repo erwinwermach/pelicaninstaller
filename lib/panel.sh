@@ -153,6 +153,9 @@ panel_phase() {
   chown -R www-data:www-data "$PANEL_DIR"
   chmod -R 755 "$PANEL_DIR/storage" "$PANEL_DIR/bootstrap/cache"
 
+  log "Linking public storage (icons, modpack assets)..."
+  (cd "$PANEL_DIR" && php artisan storage:link) >>"$INSTALL_LOG" 2>&1 || true
+
   log "Writing nginx configuration..."
   write_nginx_config
   rm -f /etc/nginx/sites-enabled/default
@@ -327,7 +330,7 @@ egg_images_phase() {
   mysql <<SQL 2>>"$INSTALL_LOG" || true
 UPDATE pelican.eggs
 SET docker_images = JSON_SET(docker_images, '$."Java 21"', 'ghcr.io/pelican-eggs/yolks:java_21', '$."Java 22"', 'ghcr.io/pelican-eggs/yolks:java_22')
-WHERE docker_images LIKE '%pterodactyl/yolks:java_%'
+WHERE docker_images LIKE '%yolks:java_%'
   AND JSON_UNQUOTE(JSON_EXTRACT(docker_images, '$."Java 21"')) IS NULL;
 SQL
   log "Egg images updated (modern Minecraft requires Java 21+)."

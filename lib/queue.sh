@@ -10,7 +10,7 @@ Wants=network-online.target
 [Service]
 User=www-data
 WorkingDirectory=/var/www/pelican
-ExecStart=/usr/bin/php /var/www/pelican/artisan queue:work redis --sleep=3 --tries=3 --timeout=60 --max-time=3600
+ExecStart=/usr/bin/php /var/www/pelican/artisan queue:work redis --sleep=3 --tries=3 --timeout=300 --max-time=3600
 Restart=always
 RestartSec=5s
 

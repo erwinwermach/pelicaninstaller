@@ -45,7 +45,7 @@ server_var() {
 }
 
 server_jars_report_add() {
-  printf '{"uuid":"%s","jar_ok":%s,"jarfile":"%s","size":%s,"fixed":%s}\n' "$1" "$2" "$3" "$4" "$5" >> "$JAR_REPORT_LINES"
+  printf '{"uuid":"%s","name":"%s","jar_ok":%s,"jarfile":"%s","size":%s,"fixed":%s}\n' "$1" "$2" "$3" "$4" "$5" "$6" >> "$JAR_REPORT_LINES"
 }
 
 set_server_var() {
@@ -97,10 +97,14 @@ server_jars_fix() {
   command -v mysql >/dev/null 2>&1 || return 0
   command -v docker >/dev/null 2>&1 || return 0
   JAR_REPORT_LINES=$(mktemp)
-  local uuid srvdir jarfile expected ok fixed size mc ldr rep_count=0
+  local uuid srvdir jarfile expected ok fixed size mc ldr rep_count=0 srvname
 
-  while IFS=$'\t' read -r uuid; do
+  while IFS=$'\t' read -r uuid srvname egg_images; do
     [ -n "$uuid" ] || continue
+    case "$egg_images" in
+      *yolks:java*|*minecraft*|*paper*|*purpur*) : ;;
+      *) continue ;;
+    esac
     srvdir="/var/lib/pelican/volumes/$uuid"
     [ -d "$srvdir" ] || continue
 
@@ -135,14 +139,14 @@ server_jars_fix() {
         fi
         ok=true
         size=$(stat -c %s "$srvdir/$game_jar" 2>/dev/null || echo 0)
-        server_jars_report_add "$uuid" "$ok" "$jarfile" "$size" "$fixed"
+        server_jars_report_add "$uuid" "$srvname" "$ok" "$jarfile" "$size" "$fixed"
         continue
       fi
     else
       if [ -f "$expected" ] && [ "$(stat -c %s "$expected" 2>/dev/null || echo 0)" -gt 100000 ]; then
         ok=true
         size=$(stat -c %s "$expected" 2>/dev/null || echo 0)
-        server_jars_report_add "$uuid" "$ok" "$jarfile" "$size" "$fixed"
+        server_jars_report_add "$uuid" "$srvname" "$ok" "$jarfile" "$size" "$fixed"
         continue
       fi
 
@@ -154,7 +158,7 @@ server_jars_fix() {
         ok=true
         fixed=true
         size=$(stat -c %s "$expected" 2>/dev/null || echo 0)
-        server_jars_report_add "$uuid" "$ok" "$jarfile" "$size" "$fixed"
+        server_jars_report_add "$uuid" "$srvname" "$ok" "$jarfile" "$size" "$fixed"
         continue
       fi
     fi
@@ -174,11 +178,11 @@ server_jars_fix() {
       fi
     fi
 
-    server_jars_report_add "$uuid" "$ok" "$jarfile" "$size" "$fixed"
-  done < <(mysql -N -B -e "SELECT s.uuid FROM pelican.servers s WHERE s.uuid IS NOT NULL;" 2>/dev/null)
+    server_jars_report_add "$uuid" "$srvname" "$ok" "$jarfile" "$size" "$fixed"
+  done < <(mysql -N -B -e "SELECT s.uuid, COALESCE(s.name,''), COALESCE(e.docker_images,'') FROM pelican.servers s LEFT JOIN pelican.eggs e ON e.id=s.egg_id WHERE s.uuid IS NOT NULL;" 2>/dev/null)
 
   if [ -s "$JAR_REPORT_LINES" ]; then
-    jq -s 'map({key: .uuid, value: del(.uuid)}) | from_entries' "$JAR_REPORT_LINES" \
+    jq -s 'map({key: .uuid, value: (.name as $n | del(.uuid, .name) | .name = $n)}) | from_entries' "$JAR_REPORT_LINES" \
       > "$JAR_REPORT_FILE" 2>/dev/null || true
     chown www-data:www-data "$JAR_REPORT_FILE" 2>/dev/null || true
   elif [ -f "$JAR_REPORT_FILE" ]; then
@@ -229,15 +233,19 @@ server_permissions_fix() {
   local last=0
   [ -f "$marker" ] && last=$(cat "$marker" 2>/dev/null || echo 0)
   local uuid srvdir scanned_any=false
-  while IFS= read -r uuid; do
+  while IFS=$'\t' read -r uuid egg_images; do
     [ -n "$uuid" ] || continue
+    case "$egg_images" in
+      *yolks:java*|*minecraft*|*paper*|*purpur*) : ;;
+      *) continue ;;
+    esac
     srvdir="/var/lib/pelican/volumes/$uuid"
     [ -d "$srvdir" ] || continue
     if volume_changed_since_last_scan "$srvdir" "$last"; then
       fix_volume_permissions "$srvdir" "$uuid"
       scanned_any=true
     fi
-  done < <(mysql -N -B -e "SELECT s.uuid FROM pelican.servers s WHERE s.uuid IS NOT NULL;" 2>/dev/null)
+  done < <(mysql -N -B -e "SELECT s.uuid, COALESCE(e.docker_images,'') FROM pelican.servers s LEFT JOIN pelican.eggs e ON e.id=s.egg_id WHERE s.uuid IS NOT NULL;" 2>/dev/null)
   date +%s > "$marker"
   return 0
 }

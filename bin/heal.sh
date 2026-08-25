@@ -131,7 +131,7 @@ server_permissions_fix
 
 # shellcheck source=../lib/perfctl.sh
 . "$HEAL_DIR/lib/perfctl.sh"
-perfctl_scan
+perf_scan
 perfctl_process_requests
 
 # shellcheck source=../lib/crashscan.sh

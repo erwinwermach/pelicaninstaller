@@ -22,6 +22,21 @@ app_api() {
   APP_RESP=${APP_RESP%$'\n'*}
 }
 
+app_api_raw() {
+  local method=$1 path=$2 body=${3:-}
+  local args=(-sS -X "$method" "$APP_API_BASE$path" \
+    -H "Authorization: Bearer ${API_KEY_ID}${API_KEY_SECRET}" \
+    -H "Accept: application/json")
+  if [ -n "$body" ]; then
+    args+=(-d "$body")
+    args+=(-H "Content-Type: application/octet-stream")
+  fi
+  APP_RESP_RAW=$(curl "${args[@]}" -m 60 -k -w $'\n%{http_code}' 2>/dev/null || true)
+  APP_CODE=${APP_RESP_RAW##*$'\n'}
+  APP_RESP_RAW=${APP_RESP_RAW%$'\n'*}
+  echo "$APP_CODE"
+}
+
 ensure_app_api_key() {
   if [ -f "$API_KEY_FILE" ]; then
     API_KEY_ID=$(grep -E '^API_KEY_ID=' "$API_KEY_FILE" | cut -d= -f2-)

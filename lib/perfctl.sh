@@ -159,7 +159,7 @@ perf_scan() {
     ooms=$(perf_recent_ooms "$uuid")
     reason=$(perf_reason_text "$profile" "$ooms")
     jq -nc --arg id "$uuid" --arg n "$name" --arg p "$profile" \
-      --arg cur "$startup" --argjson rec "$rec" --arg r "$reason" \
+      --arg cur "$startup" --arg rec "$rec" --arg r "$reason" \
       --argjson m "${memory:-1024}" --argjson o "$ooms" \
       '{uuid:$id, name:$n, profile:$p, current_startup:$cur,
         recommended_startup:$rec, reason:$r, memory_mb:$m, recent_ooms:$o}' >> "$lines" 2>/dev/null || true

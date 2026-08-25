@@ -26,6 +26,22 @@ RAM) and wired up for hosting behind **CGNAT/NAT**:
   Backends are configured via `GAME_ROUTING` in the config file — never asked
   during install. Direct LAN/public addresses are always merged into the panel
   regardless of backend, so players keep a fallback even when a tunnel fails.
+  UDP-aware: playit free tier creates TCP game tunnels (UDP needs premium or
+  the frp/direct backends); the watchdog detects UDP-heavy eggs and creates
+  `custom-udp` tunnels automatically on premium accounts.
+
+## Included eggs (imported automatically)
+
+The installer imports a curated set of eggs from the community pelican-eggs
+repos (`EXTRA_EGGS=games,bots` by default, configurable):
+
+- **Games (SteamCMD/standalone):** Rust, Valheim, 7 Days to Die, CS2,
+  CS:Source, TF2, GMod, Palworld, Satisfactory, Terraria, Factorio, FiveM
+- **Bots:** Discord bots (Red, Ree6)
+- **Runtimes:** generic Python, NodeJS, Rust — for your own scripts and bots
+
+These import **idempotently** (skipped if already present) at install and
+during the weekly self-update.
 
   *Why not ngrok/zrok/Tailscale-Funnel? Verified dead ends for games: ngrok
   free caps at 1 GB/month transfer, zrok raw TCP is private-share-only,
@@ -100,7 +116,7 @@ connectors:
 
 | Plugin | What it does |
 |---|---|
-| **Ops Board** | Admin: system health, crashlog timeline (paginated, mclo.gs upload), routing overview. Server: health + one-click jar repair, crashlogs, connection addresses + console widget |
+| **Ops Board** | Admin: system health, crashlog timeline (paginated, mclo.gs upload), routing overview. Server: health + egg info + one-click jar repair, crashlogs, connection addresses + console widget |
 | **Performance** | Per-server workload detection and recommend-only startup-flag tuning (apply/revert manually) |
 | Modpack Manager | Install/update Minecraft modpacks (CurseForge, Modrinth, FTB, ATLauncher) |
 | Minecraft Modrinth | Install/update mods & plugins from Modrinth |

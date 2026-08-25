@@ -2,6 +2,21 @@
     @php($d = $this->getData())
 
     <x-filament::section>
+        <x-slot name="heading">Egg</x-slot>
+        @if($d['egg'] && !empty($d['egg']['egg_name']))
+            <div class="flex flex-wrap items-center gap-2">
+                <p class="font-semibold">{{ $d['egg']['egg_name'] }}</p>
+                @foreach(json_decode($d['egg']['tags'] ?? '[]', true) ?: [] as $tag)
+                    <x-filament::badge color="primary" size="xs">{{ $tag }}</x-filament::badge>
+                @endforeach
+            </div>
+            <pre class="mt-2 overflow-x-auto rounded-lg bg-gray-100 p-2 text-xs text-gray-800 dark:bg-gray-900 dark:text-gray-200">{{ json_encode(json_decode($d['egg']['docker_images'] ?? '[]', true) ?: [], JSON_PRETTY_PRINT) }}</pre>
+        @else
+            <p class="text-sm text-gray-500 dark:text-gray-400">No egg information available.</p>
+        @endif
+    </x-filament::section>
+
+    <x-filament::section>
         <x-slot name="heading">Server jar</x-slot>
         <x-slot name="description">The watchdog checks and repairs server jars every 5 minutes.</x-slot>
         @if($d['jar'])

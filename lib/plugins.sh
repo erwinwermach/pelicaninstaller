@@ -76,7 +76,7 @@ EOF
   mysql <<SQL 2>>"$INSTALL_LOG" || true
 UPDATE pelican.eggs
 SET tags = JSON_ARRAY_APPEND(tags, '$', 'minecraft')
-WHERE docker_images LIKE '%pterodactyl/yolks:java_%' AND NOT JSON_CONTAINS(tags, '"minecraft"');
+WHERE docker_images LIKE '%yolks:java_%' AND NOT JSON_CONTAINS(tags, '"minecraft"');
 SQL
 
   log "Rebuilding panel caches..."

@@ -90,6 +90,15 @@ PANEL_PLUGINS=minimal
 # Set to "no" to skip our own Ops Board / Performance plugins.
 INSTALL_SELF_PLUGINS=yes
 
+# Extra eggs to import automatically (games, bots, runtimes):
+#   games    = Rust, Valheim, 7 Days to Die, CS2/CSS, TF2, GMod, Palworld,
+#              Satisfactory, Terraria, Factorio, FiveM (default)
+#   bots     = Discord bots (Red, Ree6)
+#   runtimes = generic Python, NodeJS, Rust
+#   all      = everything above
+#   none     = skip egg imports
+EXTRA_EGGS=games,bots
+
 # Route HTTP apps through the Cloudflare tunnel on app-<port>.<domain>.
 # Only Cloudflare HTTP ports work publicly (80/443/8080/8443/2052-2087/2095-2096).
 CF_APP_ROUTING=no

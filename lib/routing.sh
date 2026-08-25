@@ -204,6 +204,21 @@ playit_deploy() {
   playit_create_tunnels
 }
 
+playit_egg_for_port() {
+  local port=$1
+  mysql -N -B -e "SELECT COALESCE(e.docker_images,'') FROM pelican.allocations a LEFT JOIN pelican.servers s ON s.id=a.server_id LEFT JOIN pelican.eggs e ON e.id=s.egg_id WHERE a.port=$port LIMIT 1;" 2>/dev/null || true
+}
+
+playit_port_needs_udp() {
+  local images
+  images=$(playit_egg_for_port "$1")
+  case "$images" in
+    *rust*|*valheim*|*7-days*|*7d2d*|*source*|*csgo*|*cs2*|*tf2*|*gmod*|*garrysmod*|*terraria*|*factorio*|*fivem*|*palworld*|*satisfactory*|*starbound*)
+      return 0 ;;
+  esac
+  return 1
+}
+
 playit_create_tunnels() {
   if [ -z "${PLAYIT_API_KEY:-}" ]; then
     PLAYIT_API_KEY=$(panel_env_get PLAYIT_API_KEY)
@@ -216,14 +231,16 @@ playit_create_tunnels() {
     return 0
   }
 
-  local has_premium ttype
+  local has_premium ttype_tcp ttype_udp
   has_premium=$(echo "$PLAYIT_RESP" | jq -r '.data.permissions.has_premium // false' 2>/dev/null)
   if [ "$has_premium" = "true" ]; then
-    ttype="custom-tcp"
-    log "playit account: premium - using custom TCP tunnels."
+    ttype_tcp="custom-tcp"
+    ttype_udp="custom-udp"
+    log "playit account: premium - using custom TCP/UDP tunnels."
   else
-    ttype="minecraft-java"
-    log "playit account: free - using minecraft-java tunnels (custom TCP needs premium)."
+    ttype_tcp="minecraft-java"
+    ttype_udp=""
+    log "playit account: free - using minecraft-java TCP tunnels (custom/UDP needs premium)."
   fi
 
   local lan_ip port existing
@@ -238,19 +255,49 @@ playit_create_tunnels() {
   wanted="$(routing_ports) $db_ports"
 
   playit_api POST /v1/agents/rundata '{}'
+  local tunnel_list
+  tunnel_list=$PLAYIT_RESP
+
   for port in $(echo "$wanted" | tr ' ' '\n' | sort -un); do
-    existing=$(echo "$PLAYIT_RESP" | jq -r --arg n "pelican-$port" \
-      '.data.tunnels[]? | select((.name // "") == $n) | .id' 2>/dev/null | head -1)
-    [ -n "$existing" ] && continue
-    log "Creating playit tunnel for port $port..."
-    playit_api POST /tunnels/create \
-      "{\"name\":\"pelican-$port\",\"tunnel_type\":\"$ttype\",\"port_type\":\"tcp\",\"port_count\":1,\"origin\":{\"type\":\"agent\",\"data\":{\"agent_id\":\"$agent_id\",\"local_ip\":\"$lan_ip\",\"local_port\":$port}},\"enabled\":true}"
-    if echo "$PLAYIT_RESP" | grep -q '"status":"success"'; then
-      log "playit tunnel created for $port."
-    else
-      log_err "playit tunnel create failed for $port: $(echo "$PLAYIT_RESP" | head -c 200)"
+    local need_udp=false
+    if playit_port_needs_udp "$port"; then
+      need_udp=true
     fi
-    sleep 1
+
+    existing=$(echo "$tunnel_list" | jq -r --arg n "pelican-$port" \
+      '.data.tunnels[]? | select((.name // "") == $n) | .id' 2>/dev/null | head -1)
+    if [ -z "$existing" ]; then
+      log "Creating playit TCP tunnel for port $port..."
+      playit_api POST /tunnels/create \
+        "{\"name\":\"pelican-$port\",\"tunnel_type\":\"$ttype_tcp\",\"port_type\":\"tcp\",\"port_count\":1,\"origin\":{\"type\":\"agent\",\"data\":{\"agent_id\":\"$agent_id\",\"local_ip\":\"$lan_ip\",\"local_port\":$port}},\"enabled\":true}"
+      if echo "$PLAYIT_RESP" | grep -q '"status":"success"'; then
+        log "playit TCP tunnel created for $port."
+      else
+        log_err "playit TCP tunnel create failed for $port: $(echo "$PLAYIT_RESP" | head -c 200)"
+      fi
+      sleep 1
+    fi
+
+    if [ "$need_udp" = "true" ]; then
+      existing=$(echo "$tunnel_list" | jq -r --arg n "pelican-$port-udp" \
+        '.data.tunnels[]? | select((.name // "") == $n) | .id' 2>/dev/null | head -1)
+      if [ -z "$existing" ]; then
+        if [ -n "$ttype_udp" ]; then
+          log "Creating playit UDP tunnel for port $port (game needs UDP)..."
+          playit_api POST /tunnels/create \
+            "{\"name\":\"pelican-$port-udp\",\"tunnel_type\":\"$ttype_udp\",\"port_type\":\"udp\",\"port_count\":1,\"origin\":{\"type\":\"agent\",\"data\":{\"agent_id\":\"$agent_id\",\"local_ip\":\"$lan_ip\",\"local_port\":$port}},\"enabled\":true}"
+          if echo "$PLAYIT_RESP" | grep -q '"status":"success"'; then
+            log "playit UDP tunnel created for $port."
+          else
+            log_err "playit UDP tunnel create failed for $port: $(echo "$PLAYIT_RESP" | head -c 200)"
+          fi
+          sleep 1
+        else
+          log "Port $port appears to need UDP (game server) - free playit tier does not support UDP tunnels."
+          log "Options: premium playit (custom-udp), frp-vps backend, or direct/UPnP for UDP."
+        fi
+      fi
+    fi
   done
 }
 
@@ -375,12 +422,11 @@ frp_load_vps_config() {
   if [ -z "${FRP_VPS_KEY:-}" ] && [ -z "${FRP_VPS_PASS:-}" ]; then
     tty_secret FRP_VPS_PASS "VPS SSH password (hidden): "
   fi
-  {
-    echo "FRP_VPS_HOST=$FRP_VPS_HOST"
-    echo "FRP_VPS_USER=$FRP_VPS_USER"
-    echo "FRP_VPS_PORT=$FRP_VPS_PORT"
-    echo "FRP_VPS_KEY=$FRP_VPS_KEY"
-  } >> "$SECRETS_FILE"
+  local kv
+  for kv in "FRP_VPS_HOST=$FRP_VPS_HOST" "FRP_VPS_USER=$FRP_VPS_USER" "FRP_VPS_PORT=$FRP_VPS_PORT" "FRP_VPS_KEY=$FRP_VPS_KEY"; do
+    local key="${kv%%=*}"
+    grep -q "^${key}=" "$SECRETS_FILE" 2>/dev/null || echo "$kv" >> "$SECRETS_FILE"
+  done
   chmod 600 "$SECRETS_FILE" 2>/dev/null || true
   if [ -n "${FRP_VPS_PASS:-}" ]; then
     grep -q '^FRP_VPS_PASS=' "$SECRETS_FILE" 2>/dev/null || echo "FRP_VPS_PASS=$FRP_VPS_PASS" >> "$SECRETS_FILE"

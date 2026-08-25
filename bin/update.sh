@@ -44,6 +44,22 @@ if [ -f "$PANEL_DIR/artisan" ] && [ -f "$PANEL_DIR/.env" ] && grep -q '^APP_INST
     restart_service nginx
     log "Panel updated."
   fi
+
+  log "Reconciling nginx vhost + static caching after update..."
+  # shellcheck source=../lib/panel.sh
+  . "$UPD_DIR/lib/panel.sh"
+  # shellcheck source=../lib/tune.sh
+  . "$UPD_DIR/lib/tune.sh"
+  PANEL_SUBDOMAIN=${PANEL_SUBDOMAIN:-panel} NODE_SUBDOMAIN=${NODE_SUBDOMAIN:-node} \
+    DOMAIN=${DOMAIN:-} write_nginx_config 2>/dev/null || true
+  add_static_caching 2>/dev/null || true
+
+  log "Reconciling extra eggs (idempotent import)..."
+  # shellcheck source=../lib/node.sh
+  . "$UPD_DIR/lib/node.sh"
+  # shellcheck source=../lib/eggs.sh
+  . "$UPD_DIR/lib/eggs.sh"
+  ensure_app_api_key >/dev/null 2>&1 && eggs_phase >/dev/null 2>&1 || true
 else
   log "Panel not installed yet - skipping panel update."
 fi

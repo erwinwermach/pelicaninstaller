@@ -59,13 +59,13 @@
                 @foreach($d['jars'] as $uuid => $j)
                     <div class="rounded-lg border border-gray-200 px-3 py-2 dark:border-white/10">
                         <div class="flex items-center justify-between gap-2">
-                            <span class="truncate font-mono text-xs text-gray-500 dark:text-gray-400">{{ $uuid }}</span>
+                            <span class="truncate text-sm font-medium">{{ $j['name'] ?? $uuid }}</span>
                             <x-filament::badge :color="($j['jar_ok'] ?? false) ? 'success' : 'danger'">
                                 {{ ($j['jar_ok'] ?? false) ? 'healthy' : 'broken' }}
                             </x-filament::badge>
                         </div>
                         <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                            {{ $j['jarfile'] ?? '?' }} · {{ number_format(($j['size'] ?? 0) / 1024 / 1024, 1) }} MB
+                            <span class="font-mono">{{ $uuid }}</span> · {{ $j['jarfile'] ?? '?' }} · {{ number_format(($j['size'] ?? 0) / 1024 / 1024, 1) }} MB
                             @if($j['fixed'] ?? false)
                                 · <span class="text-success-600 dark:text-success-400">repaired</span>
                             @endif

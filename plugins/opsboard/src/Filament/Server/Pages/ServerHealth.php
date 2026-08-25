@@ -6,6 +6,8 @@ use Filament\Actions\Action;
 use Filament\Facades\Filament;
 use Filament\Notifications\Notification;
 use Filament\Pages\Page;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\File;
 use Pelicaninstaller\OpsBoard\Support\ReadsJson;
 
 class ServerHealth extends Page
@@ -22,9 +24,19 @@ class ServerHealth extends Page
     {
         $uuid = Filament::getTenant()?->uuid;
 
+        $egg = null;
+        if ($uuid) {
+            $egg = DB::table('servers')
+                ->leftJoin('eggs', 'eggs.id', '=', 'servers.egg_id')
+                ->where('servers.uuid', $uuid)
+                ->select('eggs.name as egg_name', 'eggs.docker_images', 'eggs.tags')
+                ->first();
+        }
+
         return [
             'uuid' => $uuid,
             'jar' => $this->readJson(storage_path('app/pelican-jars.json'))[$uuid] ?? null,
+            'egg' => $egg ? (array) $egg : null,
         ];
     }
 
