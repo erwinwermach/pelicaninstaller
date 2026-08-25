@@ -30,6 +30,35 @@ php_modules_install() {
   fi
 }
 
+mariadb_datadir() {
+  local dd=""
+  dd=$(grep -rhE '^datadir' /etc/mysql/ 2>/dev/null | head -1 | sed -E 's/^datadir\s*=\s*//' | tr -d ' #')
+  [ -n "$dd" ] || dd=/var/lib/mysql
+  echo "$dd"
+}
+
+mariadb_datadir_ensure() {
+  command -v mariadb-install-db >/dev/null 2>&1 || return 0
+  local dd
+  dd=$(mariadb_datadir)
+  if [ -d "$dd/mysql" ]; then
+    return 0
+  fi
+  log "MariaDB datadir at $dd has no system schema - re-initializing it as the mysql user (package postinst init fails under AppArmor setuid)..."
+  systemctl stop mariadb >/dev/null 2>&1 || true
+  mkdir -p "$dd"
+  rm -rf "$dd"/*
+  chown mysql:mysql "$dd"
+  chmod 750 "$dd"
+  if su -s /bin/bash mysql -c "mariadb-install-db --datadir='$dd' --user=mysql" >>"$INSTALL_LOG" 2>&1; then
+    log "MariaDB system schema initialized."
+  else
+    log_err "MariaDB datadir initialization failed - starting anyway, service start may fail."
+    return 1
+  fi
+  return 0
+}
+
 panel_phase() {
   banner "Phase 3 - Panel stack (PHP, MariaDB, Redis, Nginx)"
   export DEBIAN_FRONTEND=noninteractive
@@ -59,6 +88,8 @@ panel_phase() {
     chage -E -1 -m 0 -M 99999 -I -1 mysql >/dev/null 2>&1 || true
     usermod -U mysql >/dev/null 2>&1 || true
   fi
+
+  mariadb_datadir_ensure
 
   log "Starting services..."
   ensure_service mariadb 3 || die "MariaDB failed to start."

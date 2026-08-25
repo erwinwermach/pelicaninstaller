@@ -37,6 +37,24 @@ PHP_FPM="php$(panel_php_version)-fpm"
 
 core_services() {
   local svc
+  if command -v mariadb-install-db >/dev/null 2>&1 && id mysql >/dev/null 2>&1; then
+    chage -E -1 -m 0 -M 99999 -I -1 mysql >/dev/null 2>&1 || true
+    usermod -U mysql >/dev/null 2>&1 || true
+    local dd
+    dd=$(grep -rhE '^datadir' /etc/mysql/ 2>/dev/null | head -1 | sed -E 's/^datadir\s*=\s*//' | tr -d ' #')
+    dd=${dd:-/var/lib/mysql}
+    if [ ! -d "$dd/mysql" ]; then
+      hlog "mariadb datadir $dd missing system schema - re-initializing as mysql user"
+      systemctl stop mariadb >/dev/null 2>&1 || true
+      mkdir -p "$dd"
+      rm -rf "$dd"/*
+      chown mysql:mysql "$dd"
+      chmod 750 "$dd"
+      su -s /bin/bash mysql -c "mariadb-install-db --datadir='$dd' --user=mysql" >/dev/null 2>&1 \
+        && hlog "mariadb datadir re-initialized" \
+        || hlog "mariadb datadir re-init failed"
+    fi
+  fi
   for svc in mariadb redis-server "$PHP_FPM" nginx docker; do
     if ! ensure_service "$svc" 2; then
       hlog "FAILED to bring up $svc"
