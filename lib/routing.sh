@@ -11,17 +11,27 @@ routing_ports() {
 routing_phase() {
   banner "Phase 12 - Game routing ($GAME_ROUTING)"
   case "$GAME_ROUTING" in
-    playit) playit_deploy ;;
-    bore) bore_deploy ;;
-    frp-vps) frp_vps_deploy ;;
-    direct) direct_deploy ;;
-    none) log "Game routing disabled (GAME_ROUTING=none)." ;;
+    playit)
+      playit_deploy || log_err "playit setup had problems - direct connection addresses still shown in the panel."
+      ;;
+    bore)
+      bore_deploy || log_err "bore setup had problems - direct connection addresses still shown in the panel."
+      ;;
+    frp-vps)
+      frp_vps_deploy || log_err "frp setup had problems - direct connection addresses still shown in the panel."
+      ;;
+    direct)
+      direct_deploy
+      ;;
+    none)
+      log "No tunnel backend configured (GAME_ROUTING=none) - direct connection addresses still shown in the panel."
+      ;;
     *)
-      log_err "Unknown GAME_ROUTING='$GAME_ROUTING' (use playit|bore|frp-vps|direct|none)."
-      return 1
+      log_err "Unknown GAME_ROUTING='$GAME_ROUTING' (use playit|bore|frp-vps|direct|none). Falling back to direct-only."
       ;;
   esac
   routing_sync
+  return 0
 }
 
 routing_enabled_backends() {
@@ -69,6 +79,30 @@ routing_cf_app_json() {
   echo "$out]"
 }
 
+routing_lan_ip() {
+  ip route get 1.1.1.1 2>/dev/null | awk '{print $7; exit}'
+}
+
+routing_fallback_json() {
+  local lan pub
+  lan=$(routing_lan_ip)
+  [ -n "$lan" ] || lan=127.0.0.1
+  pub=""
+  wan_ip_is_usable && pub=$(public_ip)
+  local port out="{" first=1
+  for port in $(routing_ports); do
+    [ $first -eq 1 ] || out="$out,"
+    first=0
+    out="$out\"$port\":["
+    out="$out{\"backend\":\"direct\",\"address\":\"$lan:$port\",\"note\":\"direct (LAN)\"}"
+    if [ -n "$pub" ]; then
+      out="$out,{\"backend\":\"direct\",\"address\":\"$pub:$port\",\"note\":\"direct (public)\"}"
+    fi
+    out="$out]"
+  done
+  echo "$out}"
+}
+
 routing_sync() {
   command -v jq >/dev/null 2>&1 || return 0
   local backends='{}'
@@ -77,8 +111,7 @@ routing_sync() {
     backends=$(printf '%s' "$backends" | jq --arg b "$backend" '.[$b] = {"active": true}')
   done
 
-  local ports='{}'
-  local pjson
+  local pjson='{}'
   case "$GAME_ROUTING" in
     playit) pjson=$(playit_addresses_json) ;;
     bore) pjson=$(bore_addresses_json) ;;
@@ -86,9 +119,20 @@ routing_sync() {
     direct) pjson=$(direct_addresses_json) ;;
     *) pjson='{}' ;;
   esac
-  if [ -n "$pjson" ] && printf '%s' "$pjson" | jq -e . >/dev/null 2>&1; then
+  if ! printf '%s' "$pjson" | jq -e . >/dev/null 2>&1; then
+    pjson='{}'
+  fi
+
+  local fjson ports
+  fjson=$(routing_fallback_json)
+  if printf '%s' "$fjson" | jq -e . >/dev/null 2>&1; then
+    ports=$(jq -n --argjson f "$fjson" --argjson b "$pjson" '
+      ($f + $b) | with_entries(.value = (($f[.key] // []) + ($b[.key] // [])))
+    ')
+  else
     ports="$pjson"
   fi
+  [ -n "$ports" ] || ports='{}'
 
   routing_write_state "$(routing_domain_json)" "$backends" "$ports" "$(routing_cf_app_json)"
   log "Routing state updated: $ROUTES_STATE_FILE"
@@ -122,25 +166,38 @@ playit_container_running() {
   docker ps --format '{{.Names}}' 2>/dev/null | grep -qx playit-agent
 }
 
+playit_agent_ensure() {
+  if [ -z "${PLAYIT_SECRET_KEY:-}" ]; then
+    PLAYIT_SECRET_KEY=$(panel_env_get PLAYIT_SECRET_KEY)
+  fi
+  [ -n "${PLAYIT_SECRET_KEY:-}" ] || return 0
+  command -v docker >/dev/null 2>&1 || return 0
+  if playit_container_running; then
+    return 0
+  fi
+  if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -qx playit-agent; then
+    docker start playit-agent >/dev/null 2>&1 && log "playit agent restarted."
+  else
+    docker rm -f playit-agent >/dev/null 2>&1 || true
+    docker run -d --restart unless-stopped --name playit-agent --net=host \
+      -e SECRET_KEY="$PLAYIT_SECRET_KEY" \
+      ghcr.io/playit-cloud/playit-agent:1.0 >>"$INSTALL_LOG" 2>&1 \
+      && log "playit agent (re)started." \
+      || log_err "playit agent failed to start - check 'docker logs playit-agent'."
+  fi
+  sleep 3
+  return 0
+}
+
 playit_deploy() {
   if [ -z "${PLAYIT_SECRET_KEY:-}" ]; then
     PLAYIT_SECRET_KEY=$(panel_env_get PLAYIT_SECRET_KEY)
   fi
   if [ -z "${PLAYIT_SECRET_KEY:-}" ]; then
-    log "No PLAYIT_SECRET_KEY configured - playit agent skipped (add it to $CONF_FILE to enable)."
+    log "No PLAYIT_SECRET_KEY configured - playit skipped; direct connection addresses are shown in the panel instead."
     return 0
   fi
-  command -v docker >/dev/null 2>&1 || { log_err "Docker missing - cannot run playit agent."; return 1; }
-  if ! playit_container_running; then
-    docker rm -f playit-agent >/dev/null 2>&1 || true
-    docker run -d --restart unless-stopped --name playit-agent --net=host \
-      -e SECRET_KEY="$PLAYIT_SECRET_KEY" \
-      ghcr.io/playit-cloud/playit-agent:1.0 >>"$INSTALL_LOG" 2>&1 || {
-      log_err "playit agent failed to start - check 'docker logs playit-agent'."
-      return 0
-    }
-    sleep 6
-  fi
+  playit_agent_ensure
   if playit_container_running; then
     log "playit agent running."
   fi

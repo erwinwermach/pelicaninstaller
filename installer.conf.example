@@ -39,19 +39,21 @@ GAME_SUBDOMAIN_PREFIX=game
 # Format: comma separated list, ranges allowed: 25565-25575,27015
 GAME_PORTS=25565-25575
 
-# How players reach game servers (all free, players install nothing):
+# How players reach game servers (all free; NOT asked during interactive setup -
+# configure here later and re-run the installer, or leave the default).
+# The panel always shows direct connection addresses (LAN + public IP) for every
+# game port, plus tunnel addresses when a backend is active:
 #   playit    playit.gg tunnels - recommended, fully automatic public addresses
 #   bore      open-source bore client vs the free bore.pub relay; the address
 #             port changes whenever its systemd service restarts
-#             (BORE_RELAY=bore.pub can point to any self-hosted relay)
-#   frp-vps   your own VPS as stable relay (e.g. Oracle Cloud Always Free).
-#             You will be asked for SSH host/user/password-or-key once.
+#   frp-vps   your own VPS as stable relay (e.g. Oracle Cloud Always Free)
 #   direct    real port forwarding via UPnP - only works WITHOUT CGNAT
-#   none      skip game routing
+#   none      direct addresses only
 GAME_ROUTING=playit
 
 # playit.gg secret key (https://playit.gg -> Account -> Secret Key).
-# Leave empty to run playit-less backends only.
+# Leave empty for direct-only connections (the panel still shows LAN/public IP
+# addresses for every game port).
 PLAYIT_SECRET_KEY=
 
 # Optional: playit API key (Account -> API keys) for automatic tunnel creation.

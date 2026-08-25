@@ -26,14 +26,14 @@ usage() {
 
 print_routing_help() {
   cat <<'EOF'
-  How should players reach your game servers? All options are free.
-    playit    playit.gg tunnels (recommended; public address, zero setup for players)
-    bore      open-source client against the free bore.pub relay (public address;
-              port changes whenever the tunnel service restarts)
-    frp-vps   your own free-tier VPS (e.g. Oracle Always Free) as relay - fully
-              stable addresses; you need SSH access to the VPS
-    direct    real router port-forwarding / UPnP - only works WITHOUT CGNAT
-    none      skip game routing entirely
+  Game routing is optional and configured later (config key GAME_ROUTING).
+  The panel always shows direct connection addresses (LAN + public IP) for
+  every game port, plus tunnel addresses when a backend is set up:
+    playit    playit.gg tunnels (public address, zero setup for players)
+    bore      open-source client vs the free bore.pub relay
+    frp-vps   your own VPS as relay
+    direct    real router port-forwarding / UPnP (no CGNAT required)
+    none      direct addresses only
 EOF
 }
 
@@ -80,16 +80,11 @@ collect_config() {
 
   echo ""
   print_routing_help
-  tty_read GAME_ROUTING "Routing backend [playit]: " "playit"
-  GAME_ROUTING=${GAME_ROUTING:-playit}
-  case "$GAME_ROUTING" in
-    playit|bore|frp-vps|direct|none) ;;
-    *) die "Unknown GAME_ROUTING '$GAME_ROUTING' (playit|bore|frp-vps|direct|none)." ;;
-  esac
-
-  tty_secret PLAYIT_SECRET_KEY "playit.gg secret key (hidden, empty = skip playit even if selected): "
+  echo "  (nothing to set up now - skip the playit key below if you want direct-only)"
+  tty_secret PLAYIT_SECRET_KEY "playit.gg secret key (hidden, empty = direct-only): "
   echo ""
 
+  GAME_ROUTING=${GAME_ROUTING:-playit}
   tty_read NODE_NAME "Wings node name [Node-1]: " "Node-1"
   NODE_NAME=${NODE_NAME:-Node-1}
 

@@ -110,6 +110,9 @@ if [ "$GAME_ROUTING" != "none" ]; then
   if [ ! -f "$PI_ROOT/.routing-synced" ] || [ $(($(date +%s) - $(stat -c %Y "$PI_ROOT/.routing-synced" 2>/dev/null || echo 0))) -gt 600 ]; then
     case "$GAME_ROUTING" in
       playit)
+        if [ -n "${PLAYIT_SECRET_KEY:-}" ] || [ -n "$(panel_env_get PLAYIT_SECRET_KEY)" ]; then
+          playit_agent_ensure >>"$INSTALL_LOG" 2>&1 || true
+        fi
         if [ -f "$NODE_ATTEMPT_FILE" ] && [ -f "$PELICAN_ETC/config.yml" ]; then
           playit_create_tunnels > /dev/null 2>&1 || true
         fi

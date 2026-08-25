@@ -8,8 +8,12 @@ RAM) and wired up for hosting behind **CGNAT/NAT**:
   (`panel.yourdomain.com`, `node.yourdomain.com`) — no inbound ports needed.
   If a previous install already exists in your Cloudflare account, the
   installer detects it and asks: **reuse, replace, or wipe clean**.
-- **Game servers** (Minecraft etc.) get public addresses players can join with
-  zero client-side installs. Pick your backend during install (`GAME_ROUTING`):
+- **Game servers** (Minecraft etc.) always show **direct connection addresses**
+  (LAN + public IP, if reachable) on each server's Connections page — players
+  can join immediately on a LAN, VPN or a forwarded port. Optional tunnel
+  backends add public addresses when they work (see `GAME_ROUTING`), and if a
+  backend fails or is unconfigured, the direct addresses remain. Game routing
+  is **not** a required install-time decision anymore.
 
   | Backend | Cost | Stability | Notes |
   |---|---|---|---|
@@ -17,6 +21,11 @@ RAM) and wired up for hosting behind **CGNAT/NAT**:
   | `bore` | free | best-effort | open-source client vs the free `bore.pub` relay; address port changes whenever its service restarts |
   | `frp-vps` | free* | rock solid | uses **your own** free-tier VPS (e.g. Oracle Cloud Always Free) as relay — you provide SSH access once |
   | `direct` | free | n/a behind CGNAT | real router port-forwarding/UPnP; only works when your connection is NOT behind CGNAT |
+  | `none` | free | always | direct addresses only |
+
+  Backends are configured via `GAME_ROUTING` in the config file — never asked
+  during install. Direct LAN/public addresses are always merged into the panel
+  regardless of backend, so players keep a fallback even when a tunnel fails.
 
   *Why not ngrok/zrok/Tailscale-Funnel? Verified dead ends for games: ngrok
   free caps at 1 GB/month transfer, zrok raw TCP is private-share-only,
@@ -48,9 +57,11 @@ curl -fsSL https://raw.githubusercontent.com/erwinwermach/pelicaninstaller/main/
 ```
 
 You are asked once for: domain, Cloudflare token, timezone, subdomains,
-game-port range, routing backend, node name, and whether to do a full
-clean-slate reset first. A confirmed reset removes everything this installer
-manages — panel/web/database/Docker/game-tunnel data **plus** its own
+game-port range, an optional playit.gg key, node name, and whether to do a
+full clean-slate reset first. Game routing is no longer an install question —
+the panel always shows direct connection addresses for every game port, and
+tunnel backends (playit/bore/frp) are added later via `GAME_ROUTING` in the
+config. A confirmed reset removes everything this installer manages — panel/web/database/Docker/game-tunnel data **plus** its own
 config/stages/secrets — and re-downloads the installer fresh from GitHub, so
 no stale configuration (e.g. a corrupted token) can survive into the new
 setup. The OS, SSH, your user accounts and files are never touched.
