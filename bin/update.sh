@@ -53,6 +53,7 @@ if [ -f "$PANEL_DIR/artisan" ] && [ -f "$PANEL_DIR/.env" ] && grep -q '^APP_INST
   PANEL_SUBDOMAIN=${PANEL_SUBDOMAIN:-panel} NODE_SUBDOMAIN=${NODE_SUBDOMAIN:-node} \
     DOMAIN=${DOMAIN:-} write_nginx_config 2>/dev/null || true
   add_static_caching 2>/dev/null || true
+  panel_patch_navigation 2>/dev/null || true
 
   log "Reconciling extra eggs (idempotent import)..."
   # shellcheck source=../lib/node.sh

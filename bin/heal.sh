@@ -140,6 +140,9 @@ foreach (\App\Models\Role::getPermissionList() as \$model => \$prefixes) {
 }
 \$role->syncPermissions(\$perms);
 " >/dev/null 2>&1) || true
+    # shellcheck source=../lib/panel.sh
+    . "$HEAL_DIR/lib/panel.sh"
+    panel_patch_navigation >>"$INSTALL_LOG" 2>&1 || true
     # shellcheck source=../lib/eggs.sh
     . "$HEAL_DIR/lib/eggs.sh"
     ensure_app_api_key >/dev/null 2>&1 && eggs_phase >/dev/null 2>&1 || true

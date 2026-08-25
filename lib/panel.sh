@@ -449,4 +449,71 @@ nginx_enable_phase() {
   fi
   write_nginx_config
   ensure_service nginx 3 || log_err "Nginx failed to start - check /var/log/nginx/pelican.app-error.log"
+  panel_patch_navigation
+}
+
+panel_patch_navigation() {
+  # Upstream Pelican bug (current release): every admin resource generates its
+  # nav route with name filament.app.resources.<name>.index, but the app panel
+  # only registers the Servers resource - so the other 10 route names never
+  # exist and Filament drops ALL admin nav items (Servers/Users/Advanced tabs
+  # render empty). Fix: force each admin resource's route base to
+  # filament.admin.resources.<name> and stop the app panel from discovering
+  # the conflicting Servers resource.
+  local php_bin
+  php_bin="php$(panel_php_version)"
+  local dir="$PANEL_DIR/app/Filament/Admin/Resources"
+  [ -d "$dir" ] || return 0
+
+  local name slug fn
+  for name in ApiKeys BackupHosts DatabaseHosts Eggs Mounts Nodes Plugins Roles Servers Users Webhooks; do
+    case "$name" in
+      ApiKeys) slug=api-keys; fn=ApiKeyResource.php ;;
+      BackupHosts) slug=backup-hosts; fn=BackupHostResource.php ;;
+      DatabaseHosts) slug=database-hosts; fn=DatabaseHostResource.php ;;
+      *) slug=$(echo "$name" | tr '[:upper:]' '[:lower:]'); fn="${name}Resource.php" ;;
+    esac
+    local resfile="$dir/$name/$fn"
+    [ -f "$resfile" ] || continue
+    if ! grep -q "function getRouteBaseName" "$resfile"; then
+      python3 - "$resfile" "$slug" <<'PY'
+import sys, re
+path, slug = sys.argv[1], sys.argv[2]
+src = open(path).read()
+if 'function getRouteBaseName' in src:
+    sys.exit(0)
+anchor = "    public static function getNavigationBadge"
+m = re.search(r'\n    public static function [a-zA-Z]+\b', src)
+if anchor not in src and m:
+    anchor = m.group(0)
+if anchor not in src:
+    sys.exit(0)
+add = f"""
+    public static function getRouteBaseName(?\\Filament\\Panel $panel = null): string
+    {{
+        return 'filament.admin.resources.{slug}';
+    }}
+"""
+open(path, 'w').write(src.replace(anchor, add + anchor, 1))
+PY
+      log "Patched admin navigation route for $name."
+    fi
+  done
+
+  local appprov="$PANEL_DIR/app/Providers/Filament/AppPanelProvider.php"
+  if [ -f "$appprov" ] && grep -q "discoverResources(in: app_path('Filament/App/Resources')" "$appprov"; then
+    python3 - "$appprov" <<'PY'
+import sys
+path = sys.argv[1]
+src = open(path).read()
+old = "            ->discoverResources(in: app_path('Filament/App/Resources'), for: 'App\\\\Filament\\\\App\\\\Resources')\n"
+if old in src:
+    open(path, 'w').write(src.replace(old, ""))
+PY
+    log "Disabled app panel resource discovery (conflicts with admin nav)."
+  fi
+
+  (cd "$PANEL_DIR" && COMPOSER_ALLOW_SUPERUSER=1 "$php_bin" artisan optimize:clear) >>"$INSTALL_LOG" 2>&1 || true
+  (cd "$PANEL_DIR" && COMPOSER_ALLOW_SUPERUSER=1 "$php_bin" artisan view:clear) >>"$INSTALL_LOG" 2>&1 || true
+  restart_service "php$(panel_php_version)-fpm"
 }
