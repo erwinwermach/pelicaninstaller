@@ -145,42 +145,42 @@ EOF
 cf_ask_policy() {
   local val=""
   echo ""
-  echo "===================================================================="
-  echo "  EXISTING CLOUDFLARE TUNNEL FOUND"
-  echo "===================================================================="
-  echo ""
-  echo "  A tunnel named '$(cf_tunnel_name)' already exists on this account."
-  echo "  This happens when this machine (or another one on the same domain)"
-  echo "  was installed before. Cloudflare tunnels carry your panel + node"
-  echo "  hostnames, so you have to decide what to do with the old one:"
-  echo ""
+  echo "====================================================================" >&2
+  echo "  EXISTING CLOUDFLARE TUNNEL FOUND" >&2
+  echo "====================================================================" >&2
+  echo "" >&2
+  echo "  A tunnel named '$(cf_tunnel_name)' already exists on this account." >&2
+  echo "  This happens when this machine (or another one on the same domain)" >&2
+  echo "  was installed before. Cloudflare tunnels carry your panel + node" >&2
+  echo "  hostnames, so you have to decide what to do with the old one:" >&2
+  echo "" >&2
   echo "$CF_EXISTING_LIST" | jq -r --arg n "$(cf_tunnel_name)" \
-    '.[] | select(.name == $n) | "  Tunnel:  \(.name)" + "\n  Status:  \(.status)  ·  connectors: \(.connections)  ·  id: \(.id)"' 2>/dev/null
-  echo ""
-  echo "  R = USE IT, but update it for THIS machine (recommended)"
-  echo "      Keeps the existing tunnel id and its DNS records, but re-registers"
-  echo "      this server as the connector and refreshes credentials, ingress"
-  echo "      config and certificates with this machine's details. No downtime"
-  echo "      on the DNS side. Pick this when the old tunnel was just an"
-  echo "      earlier install of this same server."
-  echo ""
-  echo "  F = DELETE it and make a brand-new tunnel"
-  echo "      Removes the old tunnel + its DNS records, then creates a fresh"
-  echo "      tunnel + records from scratch. Brief outage while DNS/certs are"
-  echo "      recreated. Pick this if the old tunnel belongs to a different"
-  echo "      server you are taking over from."
-  echo ""
-  echo "  W = DELETE it, remake it, and clean up everything managed"
-  echo "      Same as F, but also removes game/SFTP A records the installer"
-  echo "      created before. Full reset of all Cloudflare-managed resources."
-  echo ""
-  echo "  A = ABORT"
-  echo "      Stop the installer so you can review/clean up manually."
-  echo "      Nothing is changed; re-run the installer after you decide."
-  echo ""
-  echo "  (Tip: 'connectors' = how many servers are currently running this"
-  echo "   tunnel. 0 means the old server is offline - safe to reuse or delete.)"
-  echo ""
+    '.[] | select(.name == $n) | "  Tunnel:  \(.name)" + "\n  Status:  \(.status)  ·  connectors: \(.connections)  ·  id: \(.id)"' >&2 2>/dev/null
+  echo "" >&2
+  echo "  R = USE IT, but update it for THIS machine (recommended)" >&2
+  echo "      Keeps the existing tunnel id and its DNS records, but re-registers" >&2
+  echo "      this server as the connector and refreshes credentials, ingress" >&2
+  echo "      config and certificates with this machine's details. No downtime" >&2
+  echo "      on the DNS side. Pick this when the old tunnel was just an" >&2
+  echo "      earlier install of this same server." >&2
+  echo "" >&2
+  echo "  F = DELETE it and make a brand-new tunnel" >&2
+  echo "      Removes the old tunnel + its DNS records, then creates a fresh" >&2
+  echo "      tunnel + records from scratch. Brief outage while DNS/certs are" >&2
+  echo "      recreated. Pick this if the old tunnel belongs to a different" >&2
+  echo "      server you are taking over from." >&2
+  echo "" >&2
+  echo "  W = DELETE it, remake it, and clean up everything managed" >&2
+  echo "      Same as F, but also removes game/SFTP A records the installer" >&2
+  echo "      created before. Full reset of all Cloudflare-managed resources." >&2
+  echo "" >&2
+  echo "  A = ABORT" >&2
+  echo "      Stop the installer so you can review/clean up manually." >&2
+  echo "      Nothing is changed; re-run the installer after you decide." >&2
+  echo "" >&2
+  echo "  (Tip: 'connectors' = how many servers are currently running this" >&2
+  echo "   tunnel. 0 means the old server is offline - safe to reuse or delete.)" >&2
+  echo "" >&2
   while :; do
     tty_read CF_POLICY_CHOICE "What should I do? [R/F/W/A] (default R): " "R"
     case "${CF_POLICY_CHOICE,,}" in
@@ -189,7 +189,7 @@ cf_ask_policy() {
       w|wipe|clean|cleanup) echo clean; return 0 ;;
       a|abort|stop|cancel) echo abort; return 0 ;;
     esac
-    echo "  Please answer R, F, W or A."
+    echo "  Please answer R, F, W or A." >&2
   done
 }
 
