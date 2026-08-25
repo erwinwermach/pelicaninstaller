@@ -41,8 +41,29 @@ core_services() {
     chage -E -1 -m 0 -M 99999 -I -1 mysql >/dev/null 2>&1 || true
     usermod -U mysql >/dev/null 2>&1 || true
     local dd
-    dd=$(grep -rhE '^datadir' /etc/mysql/ 2>/dev/null | head -1 | sed -E 's/^datadir\s*=\s*//' | tr -d ' #')
-    dd=${dd:-/var/lib/mysql}
+    dd=""
+    if command -v mariadbd >/dev/null 2>&1; then
+      dd=$(mariadbd --print-defaults 2>/dev/null | tr ' ' '\n' | grep -E '^--datadir=' | head -1 | cut -d= -f2-)
+    fi
+    if [ -z "$dd" ]; then
+      dd=$(grep -rhE '^\s*datadir\s*=' /etc/mysql/ 2>/dev/null | head -1 | sed -E 's/^.*datadir\s*=\s*//' | tr -d ' #')
+    fi
+    if [ -z "$dd" ]; then
+      if command -v mariadbd >/dev/null 2>&1; then
+        dd=$(mariadbd --help --verbose 2>/dev/null | awk '/^datadir/ {print $2; exit}' | sed 's:/*$::')
+      fi
+    fi
+    if [ -z "$dd" ]; then
+      if [ -d /var/lib/mariadb/mysql ] && [ ! -d /var/lib/mysql/mysql ]; then
+        dd=/var/lib/mariadb
+      elif [ -d /var/lib/mysql/mysql ] && [ ! -d /var/lib/mariadb/mysql ]; then
+        dd=/var/lib/mysql
+      elif dpkg -l mariadb-server 2>/dev/null | grep -q '11\.8\.6-5'; then
+        dd=/var/lib/mariadb
+      else
+        dd=/var/lib/mysql
+      fi
+    fi
     if [ ! -d "$dd/mysql" ]; then
       hlog "mariadb datadir $dd missing system schema - re-initializing as mysql user"
       systemctl stop mariadb >/dev/null 2>&1 || true

@@ -21,6 +21,13 @@ wipe_phase() {
   fi
 
   log "Removing leftover data and config directories..."
+  if command -v docker >/dev/null 2>&1; then
+    docker rm -f "$(docker ps -aq 2>/dev/null)" >/dev/null 2>&1 || true
+    docker system prune -af >/dev/null 2>&1 || true
+  fi
+  for m in $(mount 2>/dev/null | awk '/\/var\/lib\/docker/ {print $3}'); do
+    umount -lf "$m" >/dev/null 2>&1 || true
+  done
   rm -rf /var/www/pelican /var/www/pterodactyl \
     /etc/pelican /etc/cloudflared /etc/nginx /etc/apache2 /etc/php /etc/mysql \
     /var/lib/mysql /var/lib/mariadb /var/lib/docker /var/lib/redis /var/cache/nginx \
