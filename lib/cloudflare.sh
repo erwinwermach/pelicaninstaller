@@ -145,22 +145,51 @@ EOF
 cf_ask_policy() {
   local val=""
   echo ""
-  echo "A tunnel named '$(cf_tunnel_name)' already exists on this account:"
-  echo "$CF_EXISTING_LIST" | jq -r --arg n "$(cf_tunnel_name)" \
-    '.[] | select(.name == $n) | "  - \(.name) [\(.status)] connections=\(.connections) (\(.id))"' 2>/dev/null
+  echo "===================================================================="
+  echo "  EXISTING CLOUDFLARE TUNNEL FOUND"
+  echo "===================================================================="
   echo ""
-  echo "  R = reuse it (recommended when the old server is still running)"
-  echo "  F = replace it: delete the old tunnel + its DNS records, create fresh"
-  echo "  W = wipe ALL managed resources (tunnels, tunnel DNS, game/SFTP A records)"
-  echo "  A = abort so you can clean up manually"
+  echo "  A tunnel named '$(cf_tunnel_name)' already exists on this account."
+  echo "  This happens when this machine (or another one on the same domain)"
+  echo "  was installed before. Cloudflare tunnels carry your panel + node"
+  echo "  hostnames, so you have to decide what to do with the old one:"
+  echo ""
+  echo "$CF_EXISTING_LIST" | jq -r --arg n "$(cf_tunnel_name)" \
+    '.[] | select(.name == $n) | "  Tunnel:  \(.name)" + "\n  Status:  \(.status)  ·  connectors: \(.connections)  ·  id: \(.id)"' 2>/dev/null
+  echo ""
+  echo "  R = USE IT, but update it for THIS machine (recommended)"
+  echo "      Keeps the existing tunnel id and its DNS records, but re-registers"
+  echo "      this server as the connector and refreshes credentials, ingress"
+  echo "      config and certificates with this machine's details. No downtime"
+  echo "      on the DNS side. Pick this when the old tunnel was just an"
+  echo "      earlier install of this same server."
+  echo ""
+  echo "  F = DELETE it and make a brand-new tunnel"
+  echo "      Removes the old tunnel + its DNS records, then creates a fresh"
+  echo "      tunnel + records from scratch. Brief outage while DNS/certs are"
+  echo "      recreated. Pick this if the old tunnel belongs to a different"
+  echo "      server you are taking over from."
+  echo ""
+  echo "  W = DELETE it, remake it, and clean up everything managed"
+  echo "      Same as F, but also removes game/SFTP A records the installer"
+  echo "      created before. Full reset of all Cloudflare-managed resources."
+  echo ""
+  echo "  A = ABORT"
+  echo "      Stop the installer so you can review/clean up manually."
+  echo "      Nothing is changed; re-run the installer after you decide."
+  echo ""
+  echo "  (Tip: 'connectors' = how many servers are currently running this"
+  echo "   tunnel. 0 means the old server is offline - safe to reuse or delete.)"
+  echo ""
   while :; do
-    tty_read CF_POLICY_CHOICE "Choice [R/F/W/A]: " "R"
+    tty_read CF_POLICY_CHOICE "What should I do? [R/F/W/A] (default R): " "R"
     case "${CF_POLICY_CHOICE,,}" in
-      r|reuse) echo reuse; return 0 ;;
-      f|replace|fresh) echo replace; return 0 ;;
-      w|wipe|clean) echo clean; return 0 ;;
-      a|abort) echo abort; return 0 ;;
+      r|reuse|use|update) echo reuse; return 0 ;;
+      f|replace|delete|remake|fresh) echo replace; return 0 ;;
+      w|wipe|clean|cleanup) echo clean; return 0 ;;
+      a|abort|stop|cancel) echo abort; return 0 ;;
     esac
+    echo "  Please answer R, F, W or A."
   done
 }
 
@@ -199,12 +228,12 @@ cf_existing_decision() {
   if [ -z "$policy" ]; then
     if [ "${our_conns:-0}" -eq 0 ]; then
       policy=replace
-      log "Tunnel '$desired_name' exists but has NO active connectors (old server offline) - replacing it automatically."
+      log "Tunnel '$desired_name' exists but has NO active connectors (old server offline) - deleting it and creating a fresh tunnel for this machine."
     elif tty_available; then
       action=$(cf_ask_policy)
     else
       policy=reuse
-      log "Non-interactive run and tunnel '$desired_name' is live - defaulting to CF_EXISTING=reuse."
+      log "Non-interactive run and tunnel '$desired_name' is still live - defaulting to reuse (it will be updated with this machine's connector)."
     fi
   else
     action=$policy
@@ -213,10 +242,10 @@ cf_existing_decision() {
 
   case "$action" in
     reuse)
-      log "Adopting existing tunnel $our_id..."
+      log "Reusing tunnel $our_id and updating it for this machine (new connector + credentials)..."
       if cf_fetch_tunnel_token "$our_id"; then
         cf_write_creds_file
-        log "Tunnel adopted: $CF_TUNNEL_ID"
+        log "Tunnel re-registered: $CF_TUNNEL_ID (credentials + config will be refreshed for this server)."
         return 0
       fi
       log_err "Could not obtain credentials for tunnel $our_id (deleted mid-run or token lacks Tunnel Edit)."

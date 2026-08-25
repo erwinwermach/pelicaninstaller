@@ -21,9 +21,11 @@ CF_ACCOUNT_ID=
 # What to do when a tunnel named pelican-<domain> already exists on this
 # account (e.g. from a previous install or another server):
 #   (unset)  = automatic (recommended): if the existing tunnel has NO active
-#              connectors (old server offline) it is replaced automatically;
-#              if it is live you are asked interactively (reuse/replace/clean/abort)
-#   reuse    = always adopt the existing tunnel (old server still running)
+#              connectors (old server offline) it is deleted and recreated
+#              automatically; if it is live you are asked interactively
+#              (R = reuse+update for this machine / F = delete+remake /
+#               W = delete+remake+cleanup / A = abort)
+#   reuse    = always keep the tunnel and re-register this machine as connector
 #   replace  = always delete the old tunnel + its DNS records, create fresh
 #   clean    = additionally remove managed game/SFTP A records
 # Tunnels with other names are never touched.
