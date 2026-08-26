@@ -38,6 +38,28 @@ EOF
   fi
 }
 
+plugins_patch_modpack() {
+  # modpack-manager (hub plugin) throws a 500 on the Modpacks/Mods pages when no
+  # CurseForge API key is set. Patch: CurseForgeService degrades gracefully
+  # (isAvailable + empty results), pages clamp curseforge provider to 'all', and
+  # the CurseForge pill is hidden - Modrinth/FTB/ATLauncher keep working.
+  local dir="$PANEL_DIR/plugins/modpack-manager"
+  [ -d "$dir" ] || return 0
+  local pscript
+  for cand in "$SCRIPT_DIR/patches/modpack-cf-fallback.py" \
+              "${HEAL_DIR:-/opt/pelican-installer}/patches/modpack-cf-fallback.py" \
+              "${UPD_DIR:-/opt/pelican-installer}/patches/modpack-cf-fallback.py" \
+              "/opt/pelican-installer/patches/modpack-cf-fallback.py"; do
+    if [ -f "$cand" ]; then
+      pscript="$cand"
+      break
+    fi
+  done
+  [ -n "${pscript:-}" ] || { log_err "modpack-cf-fallback.py not found in installer - skipping patch."; return 0; }
+  python3 "$pscript" "$dir" || log_err "modpack-manager CurseForge fallback patch failed."
+  log "Patched modpack-manager for missing CurseForge key (Modrinth/FTB/ATLauncher fallback)."
+}
+
 plugins_reconcile() {
   # Re-enable configured plugins that ended up disabled (idempotent, heal-safe).
   # Pelican has NO p:plugin:enable CLI command - enable state lives in
@@ -104,6 +126,7 @@ SQL
 
   log "Rebuilding panel caches..."
   restart_service pelican-queue
+  plugins_patch_modpack
   # shellcheck source=../lib/tune.sh
   . "$SCRIPT_DIR/lib/tune.sh"
   panel_optimize || true
