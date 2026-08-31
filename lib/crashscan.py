@@ -170,10 +170,10 @@ def seen_recently(seen, text, now_ts, window=21600):
     return False
 
 
-def make_event(scope, source, level, ts, issue, excerpt, server=None, name=None, exit_code=None, oom=None):
+def make_event(scope, source, level, ts, issue, excerpt, server=None, name=None, exit_code=None, oom=None, event_id=None):
     preview = re.sub(r"\s+", " ", (excerpt or "")[:300]).strip()
     return {
-        "id": "%s-%s-%s-%s-%s" % (scope, source, (server or "host")[:8], ts, os.urandom(3).hex()),
+        "id": event_id or ("%s-%s-%s-%s-%s" % (scope, source, (server or "host")[:8], ts, os.urandom(3).hex())),
         "ts": ts,
         "iso": datetime.fromtimestamp(ts, tz=timezone.utc).isoformat(),
         "scope": scope,
@@ -429,7 +429,7 @@ def scan_panel_logs(state):
 
 def scan_volumes(servers):
     events = []
-    cutoff = time.time() - WINDOW
+    cutoff = time.time() - 7 * 86400
     for uuid in servers:
         vol = os.path.join(VOLUMES, uuid)
         if not os.path.isdir(vol):
@@ -459,7 +459,8 @@ def scan_volumes(servers):
                 continue
             source = "crash-report" if "crash-reports" in path else "hs-err"
             issue = first_issue(text) or "Game server crash report - see the excerpt."
-            events.append(make_event("server", source, "critical", int(st.st_mtime), issue, text, server=uuid, name=servers[uuid]))
+            eid = "server-crashreport-%s-%s" % (uuid[:8], hashlib.sha1(path.encode("utf-8", "replace")).hexdigest()[:12])
+            events.append(make_event("server", source, "critical", int(st.st_mtime), issue, text, server=uuid, name=servers[uuid], event_id=eid))
     return events
 
 

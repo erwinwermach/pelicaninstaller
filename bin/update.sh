@@ -2,6 +2,7 @@
 set -euo pipefail
 
 UPD_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SCRIPT_DIR="$UPD_DIR"
 # shellcheck source=../lib/common.sh
 . "$UPD_DIR/lib/common.sh"
 

@@ -20,6 +20,13 @@ class PerfctlPlugin implements Plugin
                 'Pelicaninstaller\\Perfctl\\Filament\\Server\\Pages',
             );
         }
+
+        if ($panel->getId() === 'admin') {
+            $panel->discoverPages(
+                plugin_path('perfctl', 'src/Filament/Admin/Pages'),
+                'Pelicaninstaller\\Perfctl\\Filament\\Admin\\Pages',
+            );
+        }
     }
 
     public function boot(Panel $panel): void

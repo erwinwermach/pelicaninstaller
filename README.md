@@ -121,7 +121,7 @@ connectors:
 | Plugin | What it does |
 |---|---|
 | **Ops Board** | Admin: system health, crashlog timeline (paginated, mclo.gs upload), routing overview. Server: health + egg info + one-click jar repair, crashlogs, connection addresses + console widget |
-| **Performance** | Per-server workload detection and recommend-only startup-flag tuning (apply/revert manually) |
+| **Performance** | Node-aware advisor: recommend-only optimization bundles (startup flags, memory sizing that fixes unbounded JVM heaps, `server.properties` + `user_jvm_args.txt` tuning, network settings for slow/high-latency links) + admin Node optimizer page |
 | Modpack Manager | Install/update Minecraft modpacks (CurseForge, Modrinth, FTB, ATLauncher) |
 | Minecraft Modrinth | Install/update mods & plugins from Modrinth |
 | Mclogs Uploader | Share server logs to mclo.gs |

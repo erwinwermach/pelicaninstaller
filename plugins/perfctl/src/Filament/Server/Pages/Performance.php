@@ -45,6 +45,7 @@ class Performance extends Page
             'result' => $result,
             'profiles' => self::$profiles,
             'generated' => $recs['generated'] ?? null,
+            'node' => $recs['node'] ?? null,
         ];
     }
 
@@ -59,12 +60,12 @@ class Performance extends Page
         return is_array($data) ? $data : [];
     }
 
-    protected function request(string $payload): void
+    protected function request(array $payload): void
     {
         $server = Filament::getTenant();
         $dir = storage_path('app/requests');
         File::ensureDirectoryExists($dir);
-        File::put("$dir/perf-{$server->uuid}.req", $payload);
+        File::put("$dir/perf-{$server->uuid}.req", json_encode($payload));
     }
 
     protected function getHeaderActions(): array
@@ -106,20 +107,20 @@ class Performance extends Page
             return;
         }
 
-        $this->request($d['rec']['profile']);
+        $this->request(['op' => 'apply', 'profile' => $d['rec']['profile']]);
         Notification::make()
             ->title('Tuning scheduled')
-            ->body("The '{$d['rec']['profile']}' flag set will be applied within 5 minutes. Restart this server afterwards. You can revert any time.")
+            ->body("The '{$d['rec']['profile']}' optimization bundle (startup flags, memory and config files) will be applied within 5 minutes. Restart this server afterwards. You can revert any time.")
             ->success()
             ->send();
     }
 
     public function revert(): void
     {
-        $this->request('revert');
+        $this->request(['op' => 'revert']);
         Notification::make()
             ->title('Revert scheduled')
-            ->body('The original startup command will be restored within 5 minutes. Restart this server afterwards.')
+            ->body('The original startup command, memory allocation and config files will be restored within 5 minutes. Restart this server afterwards.')
             ->success()
             ->send();
     }

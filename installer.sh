@@ -84,6 +84,11 @@ collect_config() {
   echo "  (nothing to set up now - skip the playit key below if you want direct-only)"
   tty_secret PLAYIT_SECRET_KEY "playit.gg secret key (hidden, empty = direct-only): "
   echo ""
+  tty_secret PLAYIT_SECRET_KEY "playit.gg secret key (hidden, empty = direct-only): "
+  echo ""
+
+  tty_secret CURSEFORGE_API_KEY "CurseForge API key (hidden, empty = CurseForge disabled): "
+  echo ""
 
   GAME_ROUTING=${GAME_ROUTING:-playit}
   tty_read NODE_NAME "Wings node name [Node-1]: " "Node-1"
@@ -101,6 +106,7 @@ NODE_SUBDOMAIN=$NODE_SUBDOMAIN
 GAME_PORTS=$GAME_PORTS
 GAME_ROUTING=$GAME_ROUTING
 PLAYIT_SECRET_KEY=$PLAYIT_SECRET_KEY
+CURSEFORGE_API_KEY=$CURSEFORGE_API_KEY
 NODE_NAME=$NODE_NAME
 AUTO_REBOOT=$AUTO_REBOOT
 EOF
@@ -115,6 +121,8 @@ validate_config() {
   NODE_SUBDOMAIN=${NODE_SUBDOMAIN:-node}
   GAME_PORTS=${GAME_PORTS:-25565-25575}
   GAME_ROUTING=${GAME_ROUTING:-playit}
+  PLAYIT_SECRET_KEY=${PLAYIT_SECRET_KEY:-}
+  CURSEFORGE_API_KEY=${CURSEFORGE_API_KEY:-}
   NODE_NAME=${NODE_NAME:-Node-1}
   TIMEZONE=${TIMEZONE:-UTC}
   AUTO_REBOOT=${AUTO_REBOOT:-yes}

@@ -58,6 +58,11 @@ GAME_ROUTING=playit
 # addresses for every game port).
 PLAYIT_SECRET_KEY=
 
+# CurseForge API key for the Modpack Manager hub plugin
+# (https://console.curseforge.com). Optional - without it CurseForge is hidden
+# and only Modrinth/FTB/ATLauncher work (no 500 errors, no dead pill).
+CURSEFORGE_API_KEY=
+
 # Optional: playit API key (Account -> API keys) for automatic tunnel creation.
 PLAYIT_API_KEY=
 

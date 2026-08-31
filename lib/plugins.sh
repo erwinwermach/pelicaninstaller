@@ -46,7 +46,7 @@ plugins_patch_modpack() {
   local dir="$PANEL_DIR/plugins/modpack-manager"
   [ -d "$dir" ] || return 0
   local pscript
-  for cand in "$SCRIPT_DIR/patches/modpack-cf-fallback.py" \
+  for cand in "${SCRIPT_DIR:-/opt/pelican-installer}/patches/modpack-cf-fallback.py" \
               "${HEAL_DIR:-/opt/pelican-installer}/patches/modpack-cf-fallback.py" \
               "${UPD_DIR:-/opt/pelican-installer}/patches/modpack-cf-fallback.py" \
               "/opt/pelican-installer/patches/modpack-cf-fallback.py"; do
@@ -115,6 +115,10 @@ EOF
   log "Configuring Modpack Manager..."
   if [ -f "$PANEL_DIR/.env" ] && ! grep -q '^MODPACK_MANAGER_STORE_METADATA' "$PANEL_DIR/.env"; then
     printf '\nMODPACK_MANAGER_STORE_METADATA=true\n' >> "$PANEL_DIR/.env"
+  fi
+  if [ -n "${CURSEFORGE_API_KEY:-}" ] && [ -f "$PANEL_DIR/.env" ] && ! grep -q '^MODPACK_MANAGER_CURSEFORGE_API_KEY' "$PANEL_DIR/.env"; then
+    printf '\nMODPACK_MANAGER_CURSEFORGE_API_KEY=%s\n' "$CURSEFORGE_API_KEY" >> "$PANEL_DIR/.env"
+    log "CurseForge API key added to panel .env."
   fi
 
   log "Tagging Java eggs as 'minecraft' (required for the Modpacks page)..."

@@ -2,6 +2,7 @@
 set -u
 
 HEAL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SCRIPT_DIR="$HEAL_DIR"
 # shellcheck source=../lib/common.sh
 . "$HEAL_DIR/lib/common.sh"
 
@@ -178,6 +179,24 @@ fi
 process_repair_requests
 server_jars_fix
 server_permissions_fix
+
+# TACZ (Timeless And Classics Zero) gun-pack mod: once its packs are extracted,
+# the default-pack backup step reuses a closed zip Deflater and kills the Forge
+# boot with a silent exit (no crash report). DefaultPackDebug skips that
+# overwrite/backup path so the server keeps booting.
+server_tacz_fix() {
+  local cfg
+  for cfg in /var/lib/pelican/volumes/*/tacz/tacz-pre.toml; do
+    [ -f "$cfg" ] || continue
+    if grep -q 'DefaultPackDebug = false' "$cfg" 2>/dev/null; then
+      sed -i 's/DefaultPackDebug = false/DefaultPackDebug = true/' "$cfg"
+      chown pelican:pelican "$cfg" 2>/dev/null || true
+      hlog "Enabled TACZ DefaultPackDebug in ${cfg%/*} - prevents pack-backup boot crash."
+    fi
+  done
+  return 0
+}
+server_tacz_fix
 
 # shellcheck source=../lib/perfctl.sh
 . "$HEAL_DIR/lib/perfctl.sh"
