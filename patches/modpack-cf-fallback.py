@@ -8,37 +8,59 @@ Makes the plugin usable without a CurseForge API key:
   and clamp setProvider('curseforge') to 'all'.
 - CurseForge provider pill hidden in both blades.
 
-Idempotent: exits 0 silently if already applied.
+Idempotent and per-file: every target is checked and patched independently, so a
+partially patched plugin tree is completed on the next run. Writes are atomic
+(temp file + rename) and each file is only written once all of its edits applied.
 Usage: python3 modpack-cf-fallback.py <plugin-root-dir>
 """
+import os
 import re
 import sys
+import tempfile
 
 
-def main() -> int:
-    root = sys.argv[1]
-    svc = f"{root}/src/Services/CurseForgeService.php"
-    page_modpack = f"{root}/src/Filament/Server/Pages/ModpackBrowserPage.php"
-    page_mod = f"{root}/src/Filament/Server/Pages/ModBrowserPage.php"
-    blade_modpack = f"{root}/resources/views/filament/server/pages/modpack-browser-page.blade.php"
-    blade_mod = f"{root}/resources/views/filament/server/pages/mod-browser-page.blade.php"
+def fail(msg):
+    print("FAIL: %s" % msg)
+    return False
 
-    src = open(svc, encoding="utf-8").read()
+
+def read(path):
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return fh.read()
+    except OSError:
+        return None
+
+
+def write_atomic(path, data):
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".cfpatch-")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(data)
+        os.replace(tmp, path)
+    except OSError:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def patch_service(path):
+    src = read(path)
+    if src is None:
+        return fail("missing %s" % path)
     if "function isAvailable" in src:
-        return 0  # already patched
-
-    edits = 0
+        return True
 
     # 1. property + constructor
-    new, n = re.subn(r"    private PendingRequest \$client;",
+    src, n = re.subn(r"    private PendingRequest \$client;",
                      "    private PendingRequest $client;\n\n    private bool $available;",
                      src, count=1)
     if n != 1:
-        print(f"FAIL: PendingRequest property not found in {svc}")
-        return 1
-    src, edits = new, edits + n
+        return fail("PendingRequest property not found in %s" % path)
 
-    new, n = re.subn(
+    src, n = re.subn(
         r"        \$apiKey = config\('modpack-manager\.curseforge_api_key'\);\n\n"
         r"        if \(empty\(\$apiKey\)\) \{\n"
         r"            throw new RuntimeException\('CurseForge API key is not configured\.[^;]+;\n"
@@ -52,12 +74,10 @@ def main() -> int:
         "        $this->client = Http::withHeaders([",
         src, count=1)
     if n != 1:
-        print(f"FAIL: constructor not found in {svc}")
-        return 1
-    src, edits = new, edits + n
+        return fail("constructor not found in %s" % path)
 
     # 2. isAvailable() after constructor
-    new, n = re.subn(
+    src, n = re.subn(
         r"        \]\)->baseUrl\(self::BASE_URL\)->timeout\(30\);\n    \}\n",
         "        ])->baseUrl(self::BASE_URL)->timeout(30);\n    }\n\n"
         "    public function isAvailable(): bool\n"
@@ -66,9 +86,7 @@ def main() -> int:
         "    }\n",
         src, count=1)
     if n != 1:
-        print(f"FAIL: constructor tail not found in {svc}")
-        return 1
-    src, edits = new, edits + n
+        return fail("constructor tail not found in %s" % path)
 
     # 3. graceful guards on every public API method
     guards = {
@@ -78,39 +96,42 @@ def main() -> int:
     }
     for names, ret in guards.items():
         pat = re.compile(r"(public function (?:%s)\([^)]*\)(?:: [\w?]+)?\n    \{)" % names)
-        new, n = pat.subn(lambda m: m.group(1) + f"\n        if (!$this->available) {{ {ret} }}", src)
+        src, n = pat.subn(lambda m: m.group(1) + "\n        if (!$this->available) { %s }" % ret, src)
         if n < 1:
-            print(f"FAIL: no methods matched ({names}) in {svc}")
-            return 1
-        src, edits = new, edits + n
+            return fail("no methods matched (%s) in %s" % (names, path))
 
-    open(svc, "w", encoding="utf-8").write(src)
-    print(f"patched CurseForgeService.php ({edits} edits)")
+    try:
+        write_atomic(path, src)
+    except OSError as exc:
+        return fail("cannot write %s (%s)" % (path, exc))
+    print("patched %s" % path)
+    return True
 
-    # 4. ModpackBrowserPage: guarded version options
-    src = open(page_modpack, encoding="utf-8").read()
-    edits = 0
-    new, n = re.subn(
+
+def patch_modpack_page(path):
+    src = read(path)
+    if src is None:
+        return fail("missing %s" % path)
+    if "->isAvailable()" in src:
+        return True
+
+    src, n = re.subn(
         r"        \$versions = app\(CurseForgeService::class\)->getMinecraftVersions\(\);",
         "        $cf = app(CurseForgeService::class);\n"
         "        $versions = $cf->isAvailable() ? $cf->getMinecraftVersions() : [];",
         src, count=1)
     if n != 1:
-        print(f"FAIL: getFilterVersionOptions not found in {page_modpack}")
-        return 1
-    src, edits = new, edits + n
+        return fail("getFilterVersionOptions not found in %s" % path)
 
-    new, n = re.subn(
+    src, n = re.subn(
         r"        \$categories = app\(CurseForgeService::class\)->getCategories\(\);",
         "        $cf = app(CurseForgeService::class);\n"
         "        $categories = $cf->isAvailable() ? $cf->getCategories() : [];",
         src, count=1)
     if n != 1:
-        print(f"FAIL: getFilterCategoryOptions not found in {page_modpack}")
-        return 1
-    src, edits = new, edits + n
+        return fail("getFilterCategoryOptions not found in %s" % path)
 
-    new, n = re.subn(
+    src, n = re.subn(
         r"    public function setProvider\(string \$provider\): void\n    \{\n        \$this->provider = \$provider;",
         "    public function setProvider(string $provider): void\n"
         "    {\n"
@@ -120,17 +141,24 @@ def main() -> int:
         "        $this->provider = $provider;",
         src, count=1)
     if n != 1:
-        print(f"FAIL: setProvider not found in {page_modpack}")
-        return 1
-    src, edits = new, edits + n
+        return fail("setProvider not found in %s" % path)
 
-    open(page_modpack, "w", encoding="utf-8").write(src)
-    print(f"patched ModpackBrowserPage.php ({edits} edits)")
+    try:
+        write_atomic(path, src)
+    except OSError as exc:
+        return fail("cannot write %s (%s)" % (path, exc))
+    print("patched %s" % path)
+    return True
 
-    # 5. ModBrowserPage: clamp setProvider
-    src = open(page_mod, encoding="utf-8").read()
-    edits = 0
-    new, n = re.subn(
+
+def patch_mod_page(path):
+    src = read(path)
+    if src is None:
+        return fail("missing %s" % path)
+    if "!app(CurseForgeService::class)->isAvailable()" in src:
+        return True
+
+    src, n = re.subn(
         r"    public function setProvider\(string \$provider\): void\n    \{\n        \$this->provider = in_array\(\$provider, \['all', 'curseforge', 'modrinth'\], true\) \? \$provider : 'all';",
         "    public function setProvider(string $provider): void\n"
         "    {\n"
@@ -140,24 +168,60 @@ def main() -> int:
         "        $this->provider = in_array($provider, ['all', 'curseforge', 'modrinth'], true) ? $provider : 'all';",
         src, count=1)
     if n != 1:
-        print(f"FAIL: setProvider not found in {page_mod}")
-        return 1
-    src, edits = new, edits + n
-    open(page_mod, "w", encoding="utf-8").write(src)
-    print(f"patched ModBrowserPage.php ({edits} edits)")
+        return fail("setProvider not found in %s" % path)
 
-    # 6. blades: hide CurseForge pill
+    try:
+        write_atomic(path, src)
+    except OSError as exc:
+        return fail("cannot write %s (%s)" % (path, exc))
+    print("patched %s" % path)
+    return True
+
+
+def patch_blade(path):
+    src = read(path)
+    if src is None:
+        return fail("missing %s" % path)
+    if "->isAvailable())" in src:
+        return True
+
     cond = "@if(app(\\Cosmii02\\ModpackManager\\Services\\CurseForgeService::class)->isAvailable())"
-    for blade in (blade_modpack, blade_mod):
-        bsrc = open(blade, encoding="utf-8").read()
-        pat = re.compile(r"^(\s*)(<button type=\"button\" wire:click=\"setProvider\('curseforge'\)\".*)$", re.M)
-        new, n = pat.subn(lambda m: m.group(1) + cond + "\n" + m.group(1) + m.group(2) + "\n" + m.group(1) + "@endif", bsrc)
-        if n != 1:
-            print(f"FAIL: CurseForge pill not found in {blade}")
-            return 1
-        open(blade, "w", encoding="utf-8").write(new)
-        print(f"patched {blade} (1 edit)")
+    pat = re.compile(r"^(\s*)(<button type=\"button\" wire:click=\"setProvider\('curseforge'\)\".*)$", re.M)
+    src, n = pat.subn(lambda m: m.group(1) + cond + "\n" + m.group(1) + m.group(2) + "\n" + m.group(1) + "@endif", src)
+    if n != 1:
+        return fail("CurseForge pill not found in %s" % path)
 
+    try:
+        write_atomic(path, src)
+    except OSError as exc:
+        return fail("cannot write %s (%s)" % (path, exc))
+    print("patched %s" % path)
+    return True
+
+
+def main():
+    if len(sys.argv) < 2:
+        print("usage: modpack-cf-fallback.py <plugin-root-dir>")
+        return 2
+    root = sys.argv[1]
+    targets = [
+        (os.path.join(root, "src", "Services", "CurseForgeService.php"), patch_service),
+        (os.path.join(root, "src", "Filament", "Server", "Pages", "ModpackBrowserPage.php"), patch_modpack_page),
+        (os.path.join(root, "src", "Filament", "Server", "Pages", "ModBrowserPage.php"), patch_mod_page),
+        (os.path.join(root, "resources", "views", "filament", "server", "pages", "modpack-browser-page.blade.php"), patch_blade),
+        (os.path.join(root, "resources", "views", "filament", "server", "pages", "mod-browser-page.blade.php"), patch_blade),
+    ]
+    ok = True
+    for path, fn in targets:
+        try:
+            if not fn(path):
+                ok = False
+        except Exception as exc:  # never leave the caller without a clear status
+            print("FAIL: unexpected error patching %s (%s)" % (path, exc))
+            ok = False
+    if not ok:
+        print("Some files could not be patched - retrying on the next heal/update run.")
+        return 1
     print("OK")
     return 0
 

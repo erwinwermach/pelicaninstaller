@@ -5,4 +5,6 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
+TimeoutStartSec=900
+PrivateTmp=yes
 ExecStart=/opt/pelican-installer/bin/heal.sh

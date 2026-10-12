@@ -13,21 +13,24 @@ fabric_installer_ensure() {
 game_jar_download() {
   local srvdir=$1 mc=$2
   command -v curl >/dev/null 2>&1 || return 1
+  case "$mc" in
+    *[!A-Za-z0-9._-]*|"") return 1 ;;
+  esac
   local jar_url
   jar_url=$(curl -fsSL -m 30 "https://launchermeta.mojang.com/mc/game/version_manifest_v2.json" 2>/dev/null \
-    | python3 -c "
-import sys, json, urllib.request
-mc = '$mc'
+    | MC_VERSION="$mc" python3 -c '
+import os, sys, json, urllib.request
+mc = os.environ.get("MC_VERSION", "")
 try:
     d = json.load(sys.stdin)
-    for v in d['versions']:
-        if v['id'] == mc:
-            vd = json.load(urllib.request.urlopen(v['url']))
-            print(vd['downloads']['server']['url'])
+    for v in d["versions"]:
+        if v["id"] == mc:
+            vd = json.load(urllib.request.urlopen(v["url"]))
+            print(vd["downloads"]["server"]["url"])
             break
 except Exception:
     pass
-") || jar_url=""
+') || jar_url=""
   [ -n "$jar_url" ] || return 1
   if curl -fsSL -m 300 -o "$srvdir/minecraft-server.jar.tmp" "$jar_url" 2>/dev/null && [ "$(stat -c %s "$srvdir/minecraft-server.jar.tmp" 2>/dev/null || echo 0)" -gt 1000000 ]; then
     rm -f "$srvdir/minecraft-server.jar" "$srvdir/server.jar"
@@ -45,7 +48,12 @@ server_var() {
 }
 
 server_jars_report_add() {
-  printf '{"uuid":"%s","name":"%s","jar_ok":%s,"jarfile":"%s","size":%s,"fixed":%s}\n' "$1" "$2" "$3" "$4" "$5" "$6" >> "$JAR_REPORT_LINES"
+  local size=${5:-0}
+  case "$size" in ''|*[!0-9]*) size=0 ;; esac
+  jq -nc --arg uuid "$1" --arg name "$2" --argjson ok "$3" --arg jarfile "$4" \
+    --argjson size "$size" --argjson fixed "$6" \
+    '{uuid: $uuid, name: $name, jar_ok: $ok, jarfile: $jarfile, size: $size, fixed: $fixed}' \
+    >> "$JAR_REPORT_LINES" 2>/dev/null || true
 }
 
 set_server_var() {
@@ -109,6 +117,7 @@ server_jars_fix() {
     [ -d "$srvdir" ] || continue
 
     jarfile=$(server_var "$uuid" SERVER_JARFILE)
+    jarfile=${jarfile##*/}
     jarfile=${jarfile:-server.jar}
     expected="$srvdir/$jarfile"
     ok=false
@@ -130,7 +139,8 @@ server_jars_fix() {
           fixed=true
         fi
         expected_jar=$(grep '^serverJar=' "$srvdir/fabric-server-launcher.properties" 2>/dev/null | cut -d= -f2-)
-        expected_jar=${expected_jar:-server.jar}
+        expected_jar=${expected_jar##*/}
+        case "$expected_jar" in ..|.|"") expected_jar=server.jar ;; esac
         if [ "$game_jar" != "$expected_jar" ] && [ ! -e "$srvdir/$expected_jar" ]; then
           ln -sf "$game_jar" "$srvdir/$expected_jar"
           chown -h pelican:pelican "$srvdir/$expected_jar" 2>/dev/null || true
@@ -193,11 +203,21 @@ server_jars_fix() {
 }
 
 process_repair_requests() {
-  mkdir -p /var/www/pelican/storage/app/requests
+  local reqdir="$PANEL_STORAGE/requests"
+  mkdir -p "$reqdir"
+  chown www-data:www-data "$reqdir" 2>/dev/null || true
+  chmod 775 "$reqdir" 2>/dev/null || true
   local req uuid
-  for req in /var/www/pelican/storage/app/requests/repair-*.req; do
+  for req in "$reqdir"/repair-*.req; do
     [ -f "$req" ] || continue
     uuid=$(basename "$req" .req | sed 's/^repair-//')
+    case "$uuid" in
+      *[!0-9a-fA-F-]*|"")
+        log_err "Ignoring invalid repair request: $(basename "$req")"
+        rm -f "$req"
+        continue
+        ;;
+    esac
     log "Repair requested for server $uuid - running jar fixer."
     server_jars_fix
     rm -f "$req"
@@ -213,11 +233,11 @@ volume_changed_since_last_scan() {
 fix_volume_permissions() {
   local srvdir=$1 fixed=false
   if [ "$(find "$srvdir" -type f ! -perm -004 2>/dev/null | wc -l)" -gt 0 ]; then
-    find "$srvdir" -type f ! -perm -004 -exec chmod 644 {} \; 2>/dev/null
+    find "$srvdir" -type f ! -perm -004 -exec chmod a+r {} \; 2>/dev/null
     fixed=true
   fi
   if [ "$(find "$srvdir" -type d ! -perm -005 2>/dev/null | wc -l)" -gt 0 ]; then
-    find "$srvdir" -type d ! -perm -005 -exec chmod 755 {} \; 2>/dev/null
+    find "$srvdir" -type d ! -perm -005 -exec chmod a+rx {} \; 2>/dev/null
     fixed=true
   fi
   if [ "$fixed" = "true" ]; then

@@ -81,9 +81,7 @@ collect_config() {
 
   echo ""
   print_routing_help
-  echo "  (nothing to set up now - skip the playit key below if you want direct-only)"
-  tty_secret PLAYIT_SECRET_KEY "playit.gg secret key (hidden, empty = direct-only): "
-  echo ""
+  echo "  (nothing to set up now - press Enter to skip the playit key for direct-only)"
   tty_secret PLAYIT_SECRET_KEY "playit.gg secret key (hidden, empty = direct-only): "
   echo ""
 
@@ -153,14 +151,13 @@ install_heal_system() {
   cp -rf "$SCRIPT_DIR/lib" "$inst_dir/"
   cp -rf "$SCRIPT_DIR/bin" "$inst_dir/"
   cp -rf "$SCRIPT_DIR/systemd" "$inst_dir/"
+  cp -rf "$SCRIPT_DIR/patches" "$inst_dir/"
   cp -f "$SCRIPT_DIR/installer.sh" "$inst_dir/"
   cp -f "$SCRIPT_DIR/install.sh" "$inst_dir/"
+  cp -f "$SCRIPT_DIR/VERSION" "$inst_dir/" 2>/dev/null || true
   chmod +x "$inst_dir/bin/heal.sh" "$inst_dir/bin/update.sh"
 
-  deploy_template "$SCRIPT_DIR/systemd/pelican-heal.service" /etc/systemd/system/pelican-heal.service 644
-  deploy_template "$SCRIPT_DIR/systemd/pelican-heal.timer" /etc/systemd/system/pelican-heal.timer 644
-  deploy_template "$SCRIPT_DIR/systemd/pelican-update.service" /etc/systemd/system/pelican-update.service 644
-  deploy_template "$SCRIPT_DIR/systemd/pelican-update.timer" /etc/systemd/system/pelican-update.timer 644
+  deploy_heal_units "$inst_dir/systemd"
 
   cat > /etc/logrotate.d/pelican <<EOF
 $LOG_DIR/*.log {
@@ -283,17 +280,19 @@ if [ "${RESET_ADMIN:-0}" = "1" ]; then
 fi
 
 if [ "$FORCE_SELF_UPDATE" = "1" ]; then
-  if self_update; then
-    echo "Installer scripts are up to date (version $(pi_local_version))."
-  else
+  self_update
+  if [ "${PI_UPDATE_PERFORMED:-0}" = "1" ]; then
     echo "Installer scripts updated to version $(pi_local_version)."
     echo "Re-run the installer to use the new version."
+  else
+    echo "Installer scripts are up to date (version $(pi_local_version))."
   fi
   exit 0
 fi
 
 if [ "${NO_SELF_UPDATE:-0}" != "1" ]; then
-  if ! self_update; then
+  self_update
+  if [ "${PI_UPDATE_PERFORMED:-0}" = "1" ]; then
     exec bash "$SCRIPT_DIR/installer.sh" --no-self-update "$@"
   fi
 fi
@@ -306,12 +305,13 @@ fi
 # configs (e.g. a corrupted CF token) can never survive into the next run.
 if [ "$SKIP_WIPE" = "0" ]; then
   wipe_peek=""
-  if [ -f "$CONF_FILE" ]; then
-    wipe_peek=$(grep -E '^WIPE_FIRST=' "$CONF_FILE" 2>/dev/null | tail -1 | cut -d= -f2- || true)
-  fi
-  if [ -z "$wipe_peek" ] && [ -n "${CONF_FILE_ARG:-}" ] && [ -f "$CONF_FILE_ARG" ]; then
+  if [ -n "${CONF_FILE_ARG:-}" ] && [ -f "$CONF_FILE_ARG" ]; then
     wipe_peek=$(grep -E '^WIPE_FIRST=' "$CONF_FILE_ARG" 2>/dev/null | tail -1 | cut -d= -f2- || true)
   fi
+  if [ -z "$wipe_peek" ] && [ -f "$CONF_FILE" ]; then
+    wipe_peek=$(grep -E '^WIPE_FIRST=' "$CONF_FILE" 2>/dev/null | tail -1 | cut -d= -f2- || true)
+  fi
+  wipe_peek=$(printf '%s' "$wipe_peek" | tr -d '"' | tr '[:upper:]' '[:lower:]')
   case "$wipe_peek" in
     no)
       SKIP_WIPE=1
@@ -356,7 +356,12 @@ if [ "$SKIP_WIPE" = "0" ]; then
   . "$SCRIPT_DIR/lib/wipe.sh"
   set +e
   wipe_phase
+  wipe_rc=$?
   set -e
+  if [ "$wipe_rc" -ne 0 ]; then
+    log_err "Clean-slate wipe failed - aborting before deleting $PI_ROOT (config and secrets were kept / backed up to /var/backups/pelican-installer)."
+    exit 1
+  fi
   rm -rf "$PI_ROOT" /var/log/pelican /run/pelican-node-attempt
   crontab -u www-data -r >/dev/null 2>&1 || true
   mkdir -p "$LOG_DIR"

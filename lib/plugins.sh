@@ -56,8 +56,36 @@ plugins_patch_modpack() {
     fi
   done
   [ -n "${pscript:-}" ] || { log_err "modpack-cf-fallback.py not found in installer - skipping patch."; return 0; }
-  python3 "$pscript" "$dir" || log_err "modpack-manager CurseForge fallback patch failed."
-  log "Patched modpack-manager for missing CurseForge key (Modrinth/FTB/ATLauncher fallback)."
+  if python3 "$pscript" "$dir"; then
+    log "Patched modpack-manager for missing CurseForge key (Modrinth/FTB/ATLauncher fallback)."
+  else
+    log_err "modpack-manager CurseForge fallback patch reported failures - will retry on the next heal/update run."
+  fi
+}
+
+plugins_ensure_installed() {
+  # Imports/installs plugins that are in the selected set but missing from the
+  # panel (e.g. the first install ran before the panel API key was available).
+  ensure_app_api_key || return 0
+  local name url
+  while IFS='|' read -r name url; do
+    [ -n "$name" ] || continue
+    app_api GET "/plugins/$name"
+    if [ "$APP_CODE" = "200" ]; then
+      continue
+    fi
+    log "Plugin '$name' is missing - importing it now..."
+    app_api POST "/plugins/import/url" "{\"url\":\"$url\"}"
+    if [ "$APP_CODE" = "201" ] || [ "$APP_CODE" = "200" ] || [ "$APP_CODE" = "204" ]; then
+      app_api POST "/plugins/$name/install"
+      log "Plugin '$name' install queued (HTTP $APP_CODE)."
+    else
+      log_err "Import failed for $name (HTTP $APP_CODE): $APP_RESP"
+    fi
+    sleep 2
+  done <<EOF
+$(plugins_selected)
+EOF
 }
 
 plugins_reconcile() {

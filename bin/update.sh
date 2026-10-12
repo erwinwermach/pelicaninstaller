@@ -13,38 +13,80 @@ mkdir -p "$LOG_DIR"
 INSTALL_LOG="$LOG_DIR/update.log"
 
 log "weekly update run starting"
+if installer_running; then
+  log "installer is running - skipping this cycle"
+  exit 0
+fi
 wait_network 60 || { log "no network - skipping"; exit 0; }
 [ -f "$CONF_FILE" ] || { log "not configured - skipping"; exit 0; }
 
 export DEBIAN_FRONTEND=noninteractive
 
+PANEL_MAINT=0
+panel_up_now() {
+  (cd "$PANEL_DIR" && php artisan up) >>"$INSTALL_LOG" 2>&1 || true
+}
+restore_panel_on_exit() {
+  [ "${PANEL_MAINT:-0}" = "1" ] && panel_up_now
+  return 0
+}
+trap restore_panel_on_exit EXIT
+
 log "Updating Ubuntu packages..."
 apt-get update -y >>"$INSTALL_LOG" 2>&1 || true
 apt-get full-upgrade -y >>"$INSTALL_LOG" 2>&1 || true
+dpkg --configure -a >>"$INSTALL_LOG" 2>&1 || true
 apt-get autoremove --purge -y >>"$INSTALL_LOG" 2>&1 || true
 apt-get clean >>"$INSTALL_LOG" 2>&1 || true
 
 if [ -f "$PANEL_DIR/artisan" ] && [ -f "$PANEL_DIR/.env" ] && grep -q '^APP_INSTALLED=true' "$PANEL_DIR/.env"; then
   log "Updating Pelican Panel..."
-  (cd "$PANEL_DIR" && php artisan down --retry=30) >>"$INSTALL_LOG" 2>&1 || true
-  curl -fsSL -m 120 -o /tmp/panel-update.tar.gz \
-    "https://github.com/pelican-dev/panel/releases/latest/download/panel.tar.gz" >>"$INSTALL_LOG" 2>&1 || true
-  if [ -s /tmp/panel-update.tar.gz ]; then
-    tar -xzf /tmp/panel-update.tar.gz -C "$PANEL_DIR" >>"$INSTALL_LOG" 2>&1 || true
-    chmod -R 755 "$PANEL_DIR/storage" "$PANEL_DIR/bootstrap/cache"
-    (cd "$PANEL_DIR" && COMPOSER_ALLOW_SUPERUSER=1 composer install --no-dev --optimize-autoloader --no-interaction) >>"$INSTALL_LOG" 2>&1 || true
+  if (cd "$PANEL_DIR" && php artisan down --retry=30) >>"$INSTALL_LOG" 2>&1; then
+    PANEL_MAINT=1
+  fi
+  panel_tar=$(mktemp /tmp/panel-update.XXXXXX.tar.gz)
+  if curl -fsSL -m 300 -o "$panel_tar" \
+      "https://github.com/pelican-dev/panel/releases/latest/download/panel.tar.gz" >>"$INSTALL_LOG" 2>&1 \
+     && [ "$(stat -c %s "$panel_tar" 2>/dev/null || echo 0)" -gt 1000000 ]; then
+    tar -xzf "$panel_tar" -C "$PANEL_DIR" >>"$INSTALL_LOG" 2>&1 || log_err "Panel tarball extraction reported errors."
+    # shellcheck source=../lib/panel.sh
+    . "$UPD_DIR/lib/panel.sh"
+    req_php=$(panel_php_requirement)
+    cur_php=$(panel_php_version)
+    if [ -n "$req_php" ] && ! php_version_satisfies "$cur_php" "$req_php"; then
+      log_err "New panel requires PHP $req_php but this server runs $cur_php - upgrading PHP..."
+      ensure_php_ppa || log_err "Could not enable the ondrej/php PPA - the panel may not run."
+      new_php=$(detect_php_version)
+      if [ -n "$new_php" ] && [ "$new_php" != "$cur_php" ]; then
+        if PHP_VER="$new_php" php_modules_install && dpkg -s "php$new_php-fpm" >/dev/null 2>&1; then
+          echo "$new_php" > "$PI_ROOT/php.version"
+          # shellcheck source=../lib/tune.sh
+          . "$UPD_DIR/lib/tune.sh"
+          tune_php_fpm || true
+          log "PHP upgraded from $cur_php to $new_php."
+        else
+          log_err "PHP $new_php modules could not be installed - the panel may not run until this is fixed."
+        fi
+      fi
+    fi
+    chmod -R 755 "$PANEL_DIR/storage" "$PANEL_DIR/bootstrap/cache" || log_err "Could not fix panel storage permissions."
+    (cd "$PANEL_DIR" && COMPOSER_ALLOW_SUPERUSER=1 composer install --no-dev --optimize-autoloader --no-interaction) >>"$INSTALL_LOG" 2>&1 || log_err "composer install failed - panel may be incomplete."
     (cd "$PANEL_DIR" && php artisan storage:link) >>"$INSTALL_LOG" 2>&1 || true
     # shellcheck source=../lib/tune.sh
     . "$UPD_DIR/lib/tune.sh"
     panel_optimize || true
-    (cd "$PANEL_DIR" && php artisan migrate --seed --force) >>"$INSTALL_LOG" 2>&1 || true
+    (cd "$PANEL_DIR" && php artisan migrate --seed --force) >>"$INSTALL_LOG" 2>&1 || log_err "Panel migrations failed - check the panel logs."
     (cd "$PANEL_DIR" && php artisan queue:restart) >>"$INSTALL_LOG" 2>&1 || true
-    chown -R www-data:www-data "$PANEL_DIR"
+    chown -R www-data:www-data "$PANEL_DIR" || log_err "Could not reset panel ownership."
     (cd "$PANEL_DIR" && php artisan up) >>"$INSTALL_LOG" 2>&1 || true
+    PANEL_MAINT=0
     restart_service "php$(panel_php_version)-fpm"
     restart_service nginx
     log "Panel updated."
+  else
+    log_err "Panel update download failed or was truncated - keeping the current panel."
   fi
+  rm -f "$panel_tar"
 
   log "Reconciling nginx vhost + static caching after update..."
   # shellcheck source=../lib/panel.sh
@@ -71,17 +113,21 @@ fi
 
 if [ -f "$PELICAN_ETC/config.yml" ]; then
   log "Updating Wings..."
-  curl -fsSL -m 120 -o /tmp/wings-new \
-    "https://github.com/pelican-dev/wings/releases/latest/download/wings_linux_$(arch_map)" >>"$INSTALL_LOG" 2>&1 || true
-  if [ -s /tmp/wings-new ]; then
-    if ! cmp -s /tmp/wings-new "$WINGS_BIN"; then
-      chmod +x /tmp/wings-new
-      mv /tmp/wings-new "$WINGS_BIN"
+  wings_tmp=$(mktemp /tmp/wings-new.XXXXXX)
+  if curl -fsSL -m 300 -o "$wings_tmp" \
+      "https://github.com/pelican-dev/wings/releases/latest/download/wings_linux_$(arch_map)" >>"$INSTALL_LOG" 2>&1 \
+     && [ "$(stat -c %s "$wings_tmp" 2>/dev/null || echo 0)" -gt 5000000 ]; then
+    chmod +x "$wings_tmp"
+    if ! cmp -s "$wings_tmp" "$WINGS_BIN"; then
+      mv -f "$wings_tmp" "$WINGS_BIN"
       restart_service wings
       log "Wings updated."
     else
-      rm -f /tmp/wings-new
+      rm -f "$wings_tmp"
     fi
+  else
+    log_err "Wings download failed or was truncated - keeping the current binary."
+    rm -f "$wings_tmp"
   fi
 fi
 
@@ -102,11 +148,13 @@ log "Pruning dangling docker images..."
 docker image prune -f >>"$INSTALL_LOG" 2>&1 || true
 
 log "Refreshing installer scripts from GitHub..."
-if self_update; then
-  log "Installer scripts are up to date (version $(pi_local_version))."
-else
+self_update
+if [ "${PI_UPDATE_PERFORMED:-0}" = "1" ]; then
   log "Installer scripts updated to version $(pi_local_version)."
+else
+  log "Installer scripts are up to date (version $(pi_local_version))."
 fi
+deploy_heal_units "$PI_HOME/systemd"
 
 log "weekly update complete"
 exit 0

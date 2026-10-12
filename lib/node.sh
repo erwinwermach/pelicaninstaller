@@ -67,11 +67,15 @@ ensure_app_api_key() {
     return 1
   fi
 
-  cat > "$API_KEY_FILE" <<EOF
+  if ! ( umask 077; cat > "$API_KEY_FILE" <<EOF
 API_KEY_ID=$id
 API_KEY_SECRET=$secret
 EOF
-  chmod 600 "$API_KEY_FILE"
+  ); then
+    log_err "Could not persist the panel API key to $API_KEY_FILE."
+    return 1
+  fi
+  chmod 600 "$API_KEY_FILE" 2>/dev/null || true
   log "Panel API key ready."
 }
 
@@ -163,12 +167,14 @@ ensure_wings_config() {
     return 1
   fi
   mkdir -p "$PELICAN_ETC"
-  echo "$APP_RESP" | jq -r . > "$PELICAN_ETC/config.yml" 2>/dev/null
-  if [ ! -s "$PELICAN_ETC/config.yml" ] || ! grep -q '"uuid"' "$PELICAN_ETC/config.yml"; then
-    log_err "Invalid node configuration received."
+  local cfg_tmp="$PELICAN_ETC/.config.yml.tmp.$$"
+  if ! printf '%s' "$APP_RESP" | jq -e . > "$cfg_tmp" 2>/dev/null || ! grep -q '"uuid"' "$cfg_tmp"; then
+    rm -f "$cfg_tmp"
+    log_err "Invalid node configuration received - existing config.yml left untouched."
     return 1
   fi
-  chmod 600 "$PELICAN_ETC/config.yml"
+  chmod 600 "$cfg_tmp" 2>/dev/null || true
+  mv -f "$cfg_tmp" "$PELICAN_ETC/config.yml"
   systemctl enable wings >/dev/null 2>&1 || true
   ensure_service wings 5 || log_err "Wings failed to start - check 'journalctl -u wings'."
   log "Wings connected to panel node $NODE_ID."

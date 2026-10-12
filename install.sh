@@ -9,6 +9,12 @@ if [ -x "$DST/installer.sh" ] && bash -n "$DST/installer.sh" 2>/dev/null; then
   exec bash "$DST/installer.sh" "$@"
 fi
 
+# Serialize concurrent bootstraps so two runs cannot interleave the download.
+if command -v flock >/dev/null 2>&1 && mkdir -p /run/lock 2>/dev/null; then
+  exec 7>/run/lock/pelican-bootstrap.lock
+  flock -n 7 || { echo "Another installer bootstrap is already running." >&2; exit 1; }
+fi
+
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 

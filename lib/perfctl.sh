@@ -541,8 +541,20 @@ perf_scan() {
   return 0
 }
 
+perf_write_result() {
+  local uuid=$1 json=$2
+  local tmp="$PERF_REQUEST_DIR/.perf-$uuid.result.tmp.$$"
+  printf '%s\n' "$json" > "$tmp" 2>/dev/null || return 0
+  chmod 644 "$tmp" 2>/dev/null || true
+  chown www-data:www-data "$tmp" 2>/dev/null || true
+  mv -f "$tmp" "$PERF_REQUEST_DIR/perf-$uuid.result" 2>/dev/null || rm -f "$tmp"
+}
+
 perf_apply_request() {
   local uuid=$1 raw op profile
+  case "$uuid" in
+    *[!0-9a-fA-F-]*|"") return 0 ;;
+  esac
   raw=$(cat "$PERF_REQUEST_DIR/perf-$uuid.req" 2>/dev/null || echo "")
   rm -f "$PERF_REQUEST_DIR/perf-$uuid.req"
 
@@ -559,7 +571,7 @@ perf_apply_request() {
   local exists
   exists=$(mysql -N -B -e "SELECT uuid FROM pelican.servers WHERE uuid='$uuid';" 2>/dev/null)
   if [ -z "$exists" ]; then
-    echo '{"ok": false, "error": "server not found"}' > "$PERF_REQUEST_DIR/perf-$uuid.result"
+    perf_write_result "$uuid" '{"ok": false, "error": "server not found"}'
     return 0
   fi
 
@@ -567,7 +579,7 @@ perf_apply_request() {
     local original memory_old files
     original=$(jq -r --arg u "$uuid" '.[$u].original_startup // empty' "$PERF_APPLIED_FILE" 2>/dev/null)
     if [ -z "$original" ]; then
-      echo '{"ok": false, "error": "no applied tuning to revert"}' > "$PERF_REQUEST_DIR/perf-$uuid.result"
+      perf_write_result "$uuid" '{"ok": false, "error": "no applied tuning to revert"}'
       return 0
     fi
     memory_old=$(jq -r --arg u "$uuid" '.[$u].memory_old // 0' "$PERF_APPLIED_FILE" 2>/dev/null)
@@ -579,7 +591,7 @@ perf_apply_request() {
       && mv -f "$PERF_APPLIED_FILE.tmp" "$PERF_APPLIED_FILE"
     perf_mirror_applied
     log "Server $uuid: tuning reverted (startup, memory and config files)."
-    echo '{"ok": true, "action": "reverted"}' > "$PERF_REQUEST_DIR/perf-$uuid.result"
+    perf_write_result "$uuid" '{"ok": true, "action": "reverted"}'
     perf_scan
     return 0
   fi
@@ -618,8 +630,11 @@ perf_apply_request() {
 
   mysql -e "UPDATE pelican.servers SET startup='$(perf_sql_escape "$rec")', memory=$recmem WHERE uuid='$uuid';" 2>>"$INSTALL_LOG"
   log "Server $uuid: applied '$chosen' tuning - startup, memory=${recmem}MB and config files (restart the server to take effect)."
-  jq -nc --arg s "$rec" --argjson m "$recmem" --argjson f "$files_applied" \
-    '{ok: true, action: "applied", startup: $s, memory_mb: $m, files: $f}' > "$PERF_REQUEST_DIR/perf-$uuid.result"
+  local result_json
+  result_json=$(jq -nc --arg s "$rec" --argjson m "$recmem" --argjson f "$files_applied" \
+    '{ok: true, action: "applied", startup: $s, memory_mb: $m, files: $f}' 2>/dev/null) \
+    || result_json='{"ok": false, "error": "internal error"}'
+  perf_write_result "$uuid" "$result_json"
   perf_scan
   return 0
 }
@@ -627,14 +642,19 @@ perf_apply_request() {
 perfctl_process_requests() {
   [ -d "$PERF_REQUEST_DIR" ] || mkdir -p "$PERF_REQUEST_DIR" 2>/dev/null
   [ -d "$PERF_REQUEST_DIR" ] || return 0
+  chown www-data:www-data "$PERF_REQUEST_DIR" 2>/dev/null || true
   local req uuid
   for req in "$PERF_REQUEST_DIR"/perf-*.req; do
     [ -e "$req" ] || continue
     uuid=$(basename "$req" .req | sed 's/^perf-//')
-    [ -n "$uuid" ] || continue
+    case "$uuid" in
+      *[!0-9a-fA-F-]*|"")
+        log_err "Ignoring invalid perf request: $(basename "$req")"
+        rm -f "$req"
+        continue
+        ;;
+    esac
     perf_apply_request "$uuid"
-    chmod 644 "$PERF_REQUEST_DIR/perf-$uuid.result" 2>/dev/null || true
-    chown www-data:www-data "$PERF_REQUEST_DIR/perf-$uuid.result" 2>/dev/null || true
   done
   return 0
 }

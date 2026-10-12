@@ -162,6 +162,28 @@ def content_key(text):
     return hashlib.md5((text or "").encode("utf-8", "replace")).hexdigest()[:16]
 
 
+def open_nofollow(path):
+    """Open a server-volume file without following a final symlink (root reads)."""
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    return os.fdopen(os.open(path, flags), "rb")
+
+
+SECRET_PATTERNS = [
+    (re.compile(r"""(?i)((?:password|passwd|secret|token|api[_-]?key|authorization|app_key)\s*[=:]\s*)[^\s"',;]{4,}"""), r"\1[redacted]"),
+    (re.compile(r"(?i)(bearer\s+)[A-Za-z0-9._~+/-]{10,}=*"), r"\1[redacted]"),
+    (re.compile(r"(?i)((?:mysql|redis|pgsql)://[^:\s]+:)[^@\s]+@"), r"\1[redacted]@"),
+    (re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----"), "[redacted private key]"),
+]
+
+
+def redact(text):
+    if not text:
+        return text
+    for pattern, repl in SECRET_PATTERNS:
+        text = pattern.sub(repl, text)
+    return text
+
+
 def seen_recently(seen, text, now_ts, window=21600):
     key = content_key(text)
     if seen.get(key, 0) > now_ts - window:
@@ -171,7 +193,8 @@ def seen_recently(seen, text, now_ts, window=21600):
 
 
 def make_event(scope, source, level, ts, issue, excerpt, server=None, name=None, exit_code=None, oom=None, event_id=None):
-    preview = re.sub(r"\s+", " ", (excerpt or "")[:300]).strip()
+    excerpt = redact(excerpt or "")
+    preview = re.sub(r"\s+", " ", excerpt[:300]).strip()
     return {
         "id": event_id or ("%s-%s-%s-%s-%s" % (scope, source, (server or "host")[:8], ts, os.urandom(3).hex())),
         "ts": ts,
@@ -394,7 +417,7 @@ def scan_panel_logs(state):
             state[key] = {"path": path, "offset": size, "seen": seen}
             continue
         try:
-            with open(path, "rb") as fh:
+            with open_nofollow(path) as fh:
                 fh.seek(offset)
                 data = fh.read(3 * 1048576)
         except OSError:
@@ -436,15 +459,19 @@ def scan_volumes(servers):
             continue
         files = []
         cr = os.path.join(vol, "crash-reports")
-        if os.path.isdir(cr):
+        if os.path.isdir(cr) and not os.path.islink(cr):
             try:
-                files += [os.path.join(cr, fn) for fn in os.listdir(cr) if fn.endswith(".txt")]
+                files += [os.path.join(cr, fn) for fn in os.listdir(cr)
+                          if fn.endswith(".txt") and not os.path.islink(os.path.join(cr, fn))]
             except OSError:
                 pass
         try:
-            files += [os.path.join(vol, fn) for fn in os.listdir(vol) if fn.startswith("hs_err_pid") and fn.endswith(".log")]
+            files += [os.path.join(vol, fn) for fn in os.listdir(vol)
+                      if fn.startswith("hs_err_pid") and fn.endswith(".log")
+                      and not os.path.islink(os.path.join(vol, fn))]
         except OSError:
             pass
+        files.sort()
         for path in files[:5]:
             try:
                 st = os.stat(path)
@@ -453,8 +480,9 @@ def scan_volumes(servers):
             if st.st_mtime < cutoff or st.st_size > 524288:
                 continue
             try:
-                with open(path, "r", errors="replace") as fh:
-                    text = "\n".join(fh.readlines()[:150])[:20000]
+                with open_nofollow(path) as fh:
+                    data = fh.read(200000).decode("utf-8", "replace")
+                text = "\n".join(data.splitlines()[:150])[:20000]
             except OSError:
                 continue
             source = "crash-report" if "crash-reports" in path else "hs-err"
@@ -478,7 +506,7 @@ def scan_consoles(servers, state, now_ts):
         entry = state.get(uuid, {})
         for rel in CONSOLE_FILES:
             path = os.path.join(vol, rel)
-            if not os.path.isfile(path):
+            if not os.path.isfile(path) or os.path.islink(path):
                 continue
             try:
                 size = os.path.getsize(path)
@@ -493,7 +521,7 @@ def scan_consoles(servers, state, now_ts):
                 entry[rel] = size
                 continue
             try:
-                with open(path, "rb") as fh:
+                with open_nofollow(path) as fh:
                     fh.seek(offset)
                     data = fh.read(1572864)
             except OSError:

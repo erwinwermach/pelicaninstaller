@@ -47,16 +47,21 @@ routing_enabled_backends() {
 routing_write_state() {
   local domain_json="$1" backends_json="$2" ports_json="$3" cf_json="$4"
   mkdir -p "$(dirname "$ROUTES_STATE_FILE")"
-  printf '{"domain":%s,"updated":"%s","backends":%s,"ports":%s,"cf_app":%s}\n' \
-    "$domain_json" "$(date -Is)" "$backends_json" "$ports_json" "$cf_json" \
-    > "$ROUTES_STATE_FILE.tmp" 2>/dev/null || return 1
-  if jq -e . "$ROUTES_STATE_FILE.tmp" >/dev/null 2>&1; then
-    chown www-data:www-data "$ROUTES_STATE_FILE.tmp" 2>/dev/null || true
-    chmod 644 "$ROUTES_STATE_FILE.tmp"
-    mv -f "$ROUTES_STATE_FILE.tmp" "$ROUTES_STATE_FILE"
-  else
-    rm -f "$ROUTES_STATE_FILE.tmp"
+  [ -n "$domain_json" ] || domain_json=null
+  [ -n "$backends_json" ] || backends_json='{}'
+  [ -n "$ports_json" ] || ports_json='{}'
+  [ -n "$cf_json" ] || cf_json='[]'
+  local tmp
+  tmp=$(mktemp "$(dirname "$ROUTES_STATE_FILE")/.routes.json.tmp.XXXXXX" 2>/dev/null) || return 1
+  if ! printf '{"domain":%s,"updated":"%s","backends":%s,"ports":%s,"cf_app":%s}\n' \
+      "$domain_json" "$(date -Is)" "$backends_json" "$ports_json" "$cf_json" > "$tmp" 2>/dev/null \
+     || ! jq -e . "$tmp" >/dev/null 2>&1; then
+    rm -f "$tmp"
+    return 1
   fi
+  chown www-data:www-data "$tmp" 2>/dev/null || true
+  chmod 644 "$tmp" 2>/dev/null || true
+  mv -f "$tmp" "$ROUTES_STATE_FILE"
 }
 
 routing_domain_json() {
@@ -134,8 +139,11 @@ routing_sync() {
   fi
   [ -n "$ports" ] || ports='{}'
 
-  routing_write_state "$(routing_domain_json)" "$backends" "$ports" "$(routing_cf_app_json)"
-  log "Routing state updated: $ROUTES_STATE_FILE"
+  if routing_write_state "$(routing_domain_json)" "$backends" "$ports" "$(routing_cf_app_json)"; then
+    log "Routing state updated: $ROUTES_STATE_FILE"
+  else
+    log_err "Could not write routing state to $ROUTES_STATE_FILE - keeping the previous file."
+  fi
 }
 
 # ------------------------------------------------------------------
@@ -147,18 +155,26 @@ playit_api() {
   local key="${PLAYIT_API_KEY:-$PLAYIT_SECRET_KEY}"
   [ -n "$key" ] || key=$(panel_env_get PLAYIT_API_KEY)
   [ -n "$key" ] || { PLAYIT_RESP=""; return 1; }
+  # Keep the key out of the process list: pass the header via a 600 config file.
+  local hdr
+  hdr=$(mktemp) || return 1
+  chmod 600 "$hdr" 2>/dev/null || true
+  printf 'header = "Authorization: Agent-Key %s"\n' "$key" > "$hdr" 2>/dev/null
   local args=(-sS -X "$method" "$PLAYIT_API_BASE$path" \
-    -H "Authorization: Agent-Key $key" \
+    -K "$hdr" \
     -H "Content-Type: application/json")
   if [ -n "$body" ]; then
     args+=(-d "$body")
   fi
   PLAYIT_RESP=$(curl "${args[@]}" -m 30 2>/dev/null || true)
+  rm -f "$hdr"
 }
 
 playit_agent_id() {
+  # Sets PLAYIT_AGENT_ID and keeps PLAYIT_RESP (the rundata response) for the caller.
   playit_api POST /v1/agents/rundata '{}' || return 1
-  echo "$PLAYIT_RESP" | jq -r '.data.agent_id // .agent_id // empty' 2>/dev/null
+  PLAYIT_AGENT_ID=$(echo "$PLAYIT_RESP" | jq -r '.data.agent_id // .agent_id // empty' 2>/dev/null)
+  [ -n "$PLAYIT_AGENT_ID" ]
 }
 
 playit_container_running() {
@@ -179,11 +195,16 @@ playit_agent_ensure() {
     docker start playit-agent >/dev/null 2>&1 && log "playit agent restarted."
   else
     docker rm -f playit-agent >/dev/null 2>&1 || true
+    local envfile
+    envfile=$(mktemp) || return 1
+    chmod 600 "$envfile" 2>/dev/null || true
+    printf 'SECRET_KEY=%s\n' "$PLAYIT_SECRET_KEY" > "$envfile" 2>/dev/null
     docker run -d --restart unless-stopped --name playit-agent --net=host \
-      -e SECRET_KEY="$PLAYIT_SECRET_KEY" \
+      --env-file "$envfile" \
       ghcr.io/playit-cloud/playit-agent:1.0 >>"$INSTALL_LOG" 2>&1 \
       && log "playit agent (re)started." \
       || log_err "playit agent failed to start - check 'docker logs playit-agent'."
+    rm -f "$envfile"
   fi
   sleep 3
   return 0
@@ -204,19 +225,14 @@ playit_deploy() {
   playit_create_tunnels
 }
 
-playit_egg_for_port() {
-  local port=$1
-  mysql -N -B -e "SELECT COALESCE(e.docker_images,'') FROM pelican.allocations a LEFT JOIN pelican.servers s ON s.id=a.server_id LEFT JOIN pelican.eggs e ON e.id=s.egg_id WHERE a.port=$port LIMIT 1;" 2>/dev/null || true
+playit_udp_ports() {
+  # One query for all ports whose game image needs UDP (avoids a mysql per port).
+  mysql -N -B -e "SELECT DISTINCT a.port FROM pelican.allocations a LEFT JOIN pelican.servers s ON s.id=a.server_id LEFT JOIN pelican.eggs e ON e.id=s.egg_id WHERE LOWER(COALESCE(e.docker_images,'')) REGEXP 'rust|valheim|7-days|7d2d|source|csgo|cs2|tf2|gmod|garrysmod|terraria|factorio|fivem|palworld|satisfactory|starbound';" 2>/dev/null || true
 }
 
 playit_port_needs_udp() {
-  local images
-  images=$(playit_egg_for_port "$1")
-  case "$images" in
-    *rust*|*valheim*|*7-days*|*7d2d*|*source*|*csgo*|*cs2*|*tf2*|*gmod*|*garrysmod*|*terraria*|*factorio*|*fivem*|*palworld*|*satisfactory*|*starbound*)
-      return 0 ;;
-  esac
-  return 1
+  [ -n "${PLAYIT_UDP_PORTS:-}" ] || return 1
+  printf '%s\n' "$PLAYIT_UDP_PORTS" | grep -qx "$1"
 }
 
 playit_create_tunnels() {
@@ -225,11 +241,12 @@ playit_create_tunnels() {
   fi
   [ -n "${PLAYIT_API_KEY:-}" ] || return 0
   playit_container_running || return 0
-  local agent_id
-  agent_id=$(playit_agent_id) || {
+  playit_agent_id || {
     log_err "playit API: could not get agent id - check the keys."
     return 0
   }
+  local agent_id="$PLAYIT_AGENT_ID"
+  # PLAYIT_RESP still holds the rundata response from the agent-id call.
 
   local has_premium ttype_tcp ttype_udp
   has_premium=$(echo "$PLAYIT_RESP" | jq -r '.data.permissions.has_premium // false' 2>/dev/null)
@@ -253,8 +270,8 @@ playit_create_tunnels() {
   fi
   local wanted
   wanted="$(routing_ports) $db_ports"
+  PLAYIT_UDP_PORTS=$(playit_udp_ports)
 
-  playit_api POST /v1/agents/rundata '{}'
   local tunnel_list
   tunnel_list=$PLAYIT_RESP
 
@@ -422,14 +439,12 @@ frp_load_vps_config() {
   if [ -z "${FRP_VPS_KEY:-}" ] && [ -z "${FRP_VPS_PASS:-}" ]; then
     tty_secret FRP_VPS_PASS "VPS SSH password (hidden): "
   fi
-  local kv
-  for kv in "FRP_VPS_HOST=$FRP_VPS_HOST" "FRP_VPS_USER=$FRP_VPS_USER" "FRP_VPS_PORT=$FRP_VPS_PORT" "FRP_VPS_KEY=$FRP_VPS_KEY"; do
-    local key="${kv%%=*}"
-    grep -q "^${key}=" "$SECRETS_FILE" 2>/dev/null || echo "$kv" >> "$SECRETS_FILE"
-  done
-  chmod 600 "$SECRETS_FILE" 2>/dev/null || true
+  secrets_set FRP_VPS_HOST "$FRP_VPS_HOST" || true
+  secrets_set FRP_VPS_USER "${FRP_VPS_USER:-root}" || true
+  secrets_set FRP_VPS_PORT "${FRP_VPS_PORT:-22}" || true
+  secrets_set FRP_VPS_KEY "${FRP_VPS_KEY:-}" || true
   if [ -n "${FRP_VPS_PASS:-}" ]; then
-    grep -q '^FRP_VPS_PASS=' "$SECRETS_FILE" 2>/dev/null || echo "FRP_VPS_PASS=$FRP_VPS_PASS" >> "$SECRETS_FILE"
+    secrets_set FRP_VPS_PASS "$FRP_VPS_PASS" || log_err "Could not save the VPS SSH password to $SECRETS_FILE."
   fi
   return 0
 }

@@ -74,6 +74,16 @@ need_root() {
   fi
 }
 
+installer_running() {
+  # True while installer.sh holds its flock - heal/update must not run then.
+  command -v flock >/dev/null 2>&1 || return 1
+  [ -e "$LOCK_DIR/pelican-installer.lock" ] || return 1
+  if flock -n "$LOCK_DIR/pelican-installer.lock" true 2>/dev/null; then
+    return 1
+  fi
+  return 0
+}
+
 check_os() {
   local os_release="${OS_RELEASE_FILE:-/etc/os-release}"
   if [ ! -r "$os_release" ]; then
@@ -187,10 +197,23 @@ expand_ports() {
 
 cf_api() {
   local method=$1 path=$2 body=${3:-}
-  local args=(-sS -X "$method" "$CF_API_BASE$path" \
-    -H "Authorization: Bearer $CF_API_TOKEN" \
-    -H "Content-Type: application/json" \
-    -H "User-Agent: pelican-installer")
+  # Keep the bearer token out of the process list: pass the headers via a 600
+  # curl config file (rewritten each call so config changes can not go stale).
+  mkdir -p "$PI_ROOT" 2>/dev/null || true
+  CF_HEADER_FILE="$PI_ROOT/.cf-curl-headers"
+  if ! ( umask 077; {
+      printf 'header = "Authorization: Bearer %s"\n' "$CF_API_TOKEN"
+      printf 'header = "Content-Type: application/json"\n'
+      printf 'header = "User-Agent: pelican-installer"\n'
+    } > "$CF_HEADER_FILE" ); then
+    CF_HEADER_FILE=""
+  fi
+  local args=(-sS -X "$method" "$CF_API_BASE$path")
+  if [ -n "${CF_HEADER_FILE:-}" ] && [ -f "$CF_HEADER_FILE" ]; then
+    args+=(-K "$CF_HEADER_FILE")
+  else
+    args+=(-H "Authorization: Bearer $CF_API_TOKEN" -H "Content-Type: application/json" -H "User-Agent: pelican-installer")
+  fi
   if [ -n "$body" ]; then
     args+=(-d "$body")
   fi
@@ -287,7 +310,7 @@ version_newer() {
 }
 
 pi_fetch_update() {
-  local tmp srcdir
+  local tmp srcdir f
   tmp=$(mktemp -d)
   if ! curl -fsSL -m 120 -o "$tmp/pi.tar.gz" "$PI_REPO_TARBALL"; then
     rm -rf "$tmp"
@@ -297,13 +320,59 @@ pi_fetch_update() {
     rm -rf "$tmp"
     return 1
   fi
-  srcdir=$(find "$tmp" -maxdepth 2 -name 'VERSION' -printf '%h' -quit 2>/dev/null)
-  if [ -z "$srcdir" ]; then
+  srcdir=$(find "$tmp" -maxdepth 2 -name 'installer.sh' -printf '%h' -quit 2>/dev/null)
+  if [ -z "$srcdir" ] || [ ! -f "$srcdir/VERSION" ] || [ ! -f "$srcdir/installer.sh" ]; then
     rm -rf "$tmp"
     return 1
   fi
-  cp -rf "$srcdir/." "$PI_HOME"/
+  # Never install a tree that does not even parse; keep the current version then.
+  if ! bash -n "$srcdir/installer.sh" 2>/dev/null; then
+    log_err "Downloaded installer.sh failed the syntax check - keeping the current version."
+    rm -rf "$tmp"
+    return 1
+  fi
+  for f in "$srcdir"/lib/*.sh "$srcdir"/bin/*.sh; do
+    [ -f "$f" ] || continue
+    if ! bash -n "$f" 2>/dev/null; then
+      log_err "Downloaded $(basename "$f") failed the syntax check - keeping the current version."
+      rm -rf "$tmp"
+      return 1
+    fi
+  done
+  # Staged swap: build the new tree next to the old one, then move it in place.
+  rm -rf "$PI_HOME.new" "$PI_HOME.old"
+  mkdir -p "$PI_HOME.new"
+  cp -rf "$srcdir/." "$PI_HOME.new/"
+  mv -f "$PI_HOME" "$PI_HOME.old" 2>/dev/null || true
+  if mv -f "$PI_HOME.new" "$PI_HOME"; then
+    chmod +x "$PI_HOME"/bin/*.sh 2>/dev/null || true
+    rm -rf "$PI_HOME.old"
+  else
+    mv -f "$PI_HOME.old" "$PI_HOME" 2>/dev/null || true
+    rm -rf "$tmp" "$PI_HOME.new"
+    return 1
+  fi
   rm -rf "$tmp"
+}
+
+deploy_heal_units() {
+  # Keep the installed systemd units in sync with the script tree
+  # (phase 14 only runs on fresh installs; updates replace the scripts in place).
+  local src="${1:-$PI_HOME/systemd}" unit changed=0
+  [ -d "$src" ] || return 0
+  for unit in pelican-heal.service pelican-heal.timer pelican-update.service pelican-update.timer; do
+    [ -f "$src/$unit" ] || continue
+    if ! cmp -s "$src/$unit" "/etc/systemd/system/$unit" 2>/dev/null; then
+      cp -f "$src/$unit" "/etc/systemd/system/$unit"
+      chmod 644 "/etc/systemd/system/$unit"
+      changed=1
+    fi
+  done
+  if [ "$changed" = "1" ]; then
+    systemctl daemon-reload >/dev/null 2>&1 || true
+    log "systemd units updated from $src."
+  fi
+  return 0
 }
 
 pi_remote_version() {
@@ -318,6 +387,9 @@ pi_remote_version() {
 }
 
 self_update() {
+  # Returns 0 whether or not anything happened; sets PI_UPDATE_PERFORMED=1 when
+  # the scripts were actually replaced (callers re-exec / log based on that).
+  PI_UPDATE_PERFORMED=0
   if [ "$PI_HOME" != "/opt/pelican-installer" ] && [ "${PI_ALLOW_SELF_UPDATE:-0}" != "1" ]; then
     return 0
   fi
@@ -329,11 +401,11 @@ self_update() {
   version_newer "$remote_v" "$local_v" || return 0
   log "New installer version $remote_v available (local ${local_v:-none}) - updating..."
   if pi_fetch_update; then
-    chmod +x "$PI_HOME"/bin/*.sh 2>/dev/null || true
+    PI_UPDATE_PERFORMED=1
     log "Installer updated to $remote_v."
-    return 1
+  else
+    log_err "Installer self-update failed - continuing with current version."
   fi
-  log_err "Installer self-update failed - continuing with current version."
   return 0
 }
 
@@ -391,9 +463,22 @@ wan_ip_is_usable() {
 }
 
 public_ip() {
-  local ip=""
+  # TTL-cached (10 min): heal cycles and routing share one lookup.
+  local cache="$PI_ROOT/.public-ip" now last ip=""
+  now=$(date +%s)
+  if [ -f "$cache" ]; then
+    last=$(stat -c %Y "$cache" 2>/dev/null || echo 0)
+    if [ $(( now - last )) -lt 600 ]; then
+      ip=$(cat "$cache" 2>/dev/null || true)
+      [ -n "$ip" ] && { echo "$ip"; return 0; }
+    fi
+  fi
   ip=$(curl -fsS -m 10 https://api.ipify.org 2>/dev/null || true)
   [ -n "$ip" ] || ip=$(curl -fsS -m 10 https://ifconfig.me 2>/dev/null || true)
+  if [ -n "$ip" ]; then
+    mkdir -p "$PI_ROOT" 2>/dev/null || true
+    printf '%s\n' "$ip" > "$cache" 2>/dev/null || true
+  fi
   echo "$ip"
 }
 
@@ -413,4 +498,22 @@ panel_env_get() {
     val=$(grep -E "^${key}=" "$PANEL_DIR/.env" 2>/dev/null | tail -1 | cut -d= -f2-)
   fi
   echo "$val"
+}
+
+secrets_set() {
+  # Write KEY=<shell-escaped value> into $SECRETS_FILE (mode 600), keeping any
+  # existing value. Values with spaces/quotes/backticks stay inert when sourced.
+  local key=$1 value=$2
+  case "$key" in
+    *[!A-Z0-9_]*|"") return 1 ;;
+  esac
+  mkdir -p "$(dirname "$SECRETS_FILE")"
+  if [ ! -f "$SECRETS_FILE" ]; then
+    ( umask 077; : > "$SECRETS_FILE" ) || return 1
+  fi
+  chmod 600 "$SECRETS_FILE" 2>/dev/null || true
+  grep -q "^${key}=" "$SECRETS_FILE" 2>/dev/null && return 0
+  ( umask 077; printf '%s=%q\n' "$key" "$value" >> "$SECRETS_FILE" ) || return 1
+  chmod 600 "$SECRETS_FILE" 2>/dev/null || true
+  return 0
 }

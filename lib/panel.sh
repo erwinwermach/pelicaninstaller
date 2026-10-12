@@ -1,7 +1,56 @@
+ensure_php_ppa() {
+  # Current Pelican releases require PHP 8.4+, which the Ubuntu 24.04 archives
+  # do not ship - add the ondrej/php PPA when no 8.4/8.5 candidate is available.
+  local v
+  for v in 8.5 8.4; do
+    if apt-cache policy "php$v-fpm" 2>/dev/null | grep -qE 'Candidate: [0-9]'; then
+      return 0
+    fi
+  done
+  log "No PHP 8.4+ in the configured apt sources - adding the ondrej/php PPA..."
+  apt-get install -y software-properties-common >>"$INSTALL_LOG" 2>&1 || true
+  LC_ALL=C.UTF-8 add-apt-repository -y ppa:ondrej/php >>"$INSTALL_LOG" 2>&1 || {
+    log_err "Could not add ppa:ondrej/php (network or apt problem)."
+    return 1
+  }
+  apt-get update -y >>"$INSTALL_LOG" 2>&1 || true
+  for v in 8.5 8.4; do
+    if apt-cache policy "php$v-fpm" 2>/dev/null | grep -qE 'Candidate: [0-9]'; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+php_version_satisfies() {
+  # True when $1 (e.g. 8.4) satisfies a composer constraint like "^8.4 || ^8.5".
+  local cur=$1 req=$2 token cmaj cmin tmaj tmin
+  [ -n "$cur" ] || return 1
+  [ -n "$req" ] || return 0
+  case "$req" in *"*"*) return 0 ;; esac
+  cmaj=${cur%%.*}
+  cmin=${cur#*.}
+  cmin=${cmin%%.*}
+  for token in ${req//||/ }; do
+    token=${token//^/}
+    token=${token//~/}
+    token=${token//\>=/}
+    tmaj=${token%%.*}
+    tmin=${token#*.}
+    tmin=${tmin%%.*}
+    [ "$tmaj" = "$cmaj" ] && [ "$tmin" = "$cmin" ] && return 0
+  done
+  return 1
+}
+
+panel_php_requirement() {
+  jq -r '.require.php // empty' "$PANEL_DIR/composer.json" 2>/dev/null
+}
+
 detect_php_version() {
   apt-get update -y >>"$INSTALL_LOG" 2>&1 || true
   local v
-  for v in 8.5 8.4 8.3; do
+  for v in 8.5 8.4; do
     if apt-cache show "php$v-fpm" >/dev/null 2>&1 && [ "$(apt-cache policy "php$v-fpm" 2>/dev/null | grep -c Candidate)" != "0" ]; then
       if ! apt-cache policy "php$v-fpm" 2>/dev/null | grep -q 'Candidate: (none)'; then
         echo "$v"
@@ -13,12 +62,14 @@ detect_php_version() {
 }
 
 php_modules_install() {
-  local base="php$(panel_php_version)"
+  # Honors PHP_VER when set (used by the weekly update when the panel bumps
+  # its PHP floor); otherwise uses the recorded/installed version.
+  local base="php${PHP_VER:-$(panel_php_version)}"
   local core_ok=0
   apt-get install -y "$base-cli" "$base-fpm" "$base-gd" "$base-mysql" "$base-mbstring" \
     "$base-bcmath" "$base-xml" "$base-curl" "$base-zip" "$base-intl" "$base-sqlite3" >>"$INSTALL_LOG" 2>&1 && core_ok=1
   if [ "$core_ok" = "0" ]; then
-    for v in 8.5 8.4 8.3; do
+    for v in 8.5 8.4; do
       base="php$v"
       apt-get install -y "$base-cli" "$base-fpm" "$base-gd" "$base-mysql" "$base-mbstring" \
         "$base-bcmath" "$base-xml" "$base-curl" "$base-zip" "$base-intl" "$base-sqlite3" >>"$INSTALL_LOG" 2>&1 && { core_ok=1; break; }
@@ -89,9 +140,11 @@ panel_phase() {
   NODE_FQDN="$NODE_SUBDOMAIN.$DOMAIN"
 
   log "Detecting available PHP version..."
+  ensure_php_ppa || die "Pelican requires PHP 8.4+ and the ondrej/php PPA could not be enabled. Check network/apt and re-run."
   local detected
   detected=$(detect_php_version)
-  PHP_VER="${PHP_VER:-${detected:-8.3}}"
+  PHP_VER="${PHP_VER:-$detected}"
+  [ -n "$PHP_VER" ] || die "No supported PHP version (8.4+) found. Current Pelican releases require PHP 8.4 or newer."
   mkdir -p "$PI_ROOT"
   echo "$PHP_VER" > "$PI_ROOT/php.version"
   log "Using PHP $PHP_VER"
@@ -139,9 +192,22 @@ panel_phase() {
 
   log "Downloading Pelican Panel..."
   mkdir -p "$PANEL_DIR"
-  curl -fsSL -m 120 -o /tmp/panel.tar.gz "https://github.com/pelican-dev/panel/releases/latest/download/panel.tar.gz" >>"$INSTALL_LOG" 2>&1 \
-    || die "Failed to download panel. Retry when GitHub is reachable."
-  tar -xzf /tmp/panel.tar.gz -C "$PANEL_DIR" >>"$INSTALL_LOG" 2>&1 || die "Failed to extract panel."
+  local panel_tar
+  panel_tar=$(mktemp /tmp/panel-setup.XXXXXX.tar.gz)
+  if ! curl -fsSL -m 300 -o "$panel_tar" "https://github.com/pelican-dev/panel/releases/latest/download/panel.tar.gz" >>"$INSTALL_LOG" 2>&1 \
+     || [ "$(stat -c %s "$panel_tar" 2>/dev/null || echo 0)" -lt 1000000 ]; then
+    rm -f "$panel_tar"
+    die "Failed to download panel (or the download was truncated). Retry when GitHub is reachable."
+  fi
+  tar -xzf "$panel_tar" -C "$PANEL_DIR" >>"$INSTALL_LOG" 2>&1 || { rm -f "$panel_tar"; die "Failed to extract panel."; }
+  rm -f "$panel_tar"
+
+  local req_php cur_php
+  req_php=$(panel_php_requirement)
+  cur_php=$(panel_php_version)
+  if [ -n "$req_php" ] && ! php_version_satisfies "$cur_php" "$req_php"; then
+    die "The downloaded panel requires PHP $req_php but PHP $cur_php is installed. Set PHP_VER to a supported version (e.g. 8.4) and re-run."
+  fi
 
   log "Installing Composer..."
   curl -fsSL -m 60 -o /tmp/composer-setup.php "https://getcomposer.org/installer" >>"$INSTALL_LOG" 2>&1 \
@@ -465,18 +531,25 @@ panel_patch_navigation() {
   local dir="$PANEL_DIR/app/Filament/Admin/Resources"
   [ -d "$dir" ] || return 0
 
-  local name slug fn
-  for name in ApiKeys BackupHosts DatabaseHosts Eggs Mounts Nodes Plugins Roles Servers Users Webhooks; do
-    case "$name" in
-      ApiKeys) slug=api-keys; fn=ApiKeyResource.php ;;
-      BackupHosts) slug=backup-hosts; fn=BackupHostResource.php ;;
-      DatabaseHosts) slug=database-hosts; fn=DatabaseHostResource.php ;;
-      *) slug=$(echo "$name" | tr '[:upper:]' '[:lower:]'); fn="${name}Resource.php" ;;
+  # Discover the resources from disk instead of a hard-coded filename list:
+  # upstream uses plural directories with singular file names (Eggs/EggResource.php),
+  # so guessing names silently skipped most resources.
+  local resfile sub slug found=0 patched=0 changed=0
+  while IFS= read -r resfile; do
+    found=$((found + 1))
+    sub=${resfile#"$dir"/}
+    sub=${sub%%/*}
+    if grep -q "function getRouteBaseName" "$resfile" 2>/dev/null; then
+      patched=$((patched + 1))
+      continue
+    fi
+    case "$sub" in
+      ApiKeys) slug=api-keys ;;
+      BackupHosts) slug=backup-hosts ;;
+      DatabaseHosts) slug=database-hosts ;;
+      *) slug=$(printf '%s' "$sub" | tr '[:upper:]' '[:lower:]') ;;
     esac
-    local resfile="$dir/$name/$fn"
-    [ -f "$resfile" ] || continue
-    if ! grep -q "function getRouteBaseName" "$resfile"; then
-      python3 - "$resfile" "$slug" <<'PY'
+    if python3 - "$resfile" "$slug" <<'PY'
 import sys, re
 path, slug = sys.argv[1], sys.argv[2]
 src = open(path).read()
@@ -487,7 +560,7 @@ m = re.search(r'\n    public static function [a-zA-Z]+\b', src)
 if anchor not in src and m:
     anchor = m.group(0)
 if anchor not in src:
-    sys.exit(0)
+    sys.exit(3)
 add = f"""
     public static function getRouteBaseName(?\\Filament\\Panel $panel = null): string
     {{
@@ -496,11 +569,27 @@ add = f"""
 """
 open(path, 'w').write(src.replace(anchor, add + anchor, 1))
 PY
-      log "Patched admin navigation route for $name."
+    then
+      patched=$((patched + 1))
+      changed=1
+      log "Patched admin navigation route for $sub."
+    else
+      log_err "Could not patch admin navigation route in $resfile - unexpected structure after a panel update?"
     fi
-  done
+  done < <(find "$dir" -mindepth 2 -maxdepth 2 -name '*Resource.php' 2>/dev/null | sort)
 
-  (cd "$PANEL_DIR" && COMPOSER_ALLOW_SUPERUSER=1 "$php_bin" artisan optimize:clear) >>"$INSTALL_LOG" 2>&1 || true
-  (cd "$PANEL_DIR" && COMPOSER_ALLOW_SUPERUSER=1 "$php_bin" artisan view:clear) >>"$INSTALL_LOG" 2>&1 || true
-  restart_service "php$(panel_php_version)-fpm"
+  if [ "$found" -eq 0 ]; then
+    log_err "panel_patch_navigation: no admin Filament resources found under $dir - not patching."
+    return 0
+  fi
+  if [ "$patched" -lt "$found" ]; then
+    log_err "panel_patch_navigation: only $patched/$found admin resources could be patched - admin navigation may be incomplete."
+  fi
+
+  if [ "$changed" = "1" ]; then
+    (cd "$PANEL_DIR" && COMPOSER_ALLOW_SUPERUSER=1 "$php_bin" artisan optimize:clear) >>"$INSTALL_LOG" 2>&1 || true
+    (cd "$PANEL_DIR" && COMPOSER_ALLOW_SUPERUSER=1 "$php_bin" artisan view:clear) >>"$INSTALL_LOG" 2>&1 || true
+    restart_service "php$(panel_php_version)-fpm"
+  fi
+  return 0
 }

@@ -58,6 +58,9 @@ game-tunnel mapping, service recovery — running 24/7 via systemd.
 
 ### Requirements
 - Ubuntu Server 24.04 (24.04.x) — the installer refuses to run on anything else.
+- PHP 8.4+ for the panel (current Pelican releases): on 24.04 the installer
+  adds the **ondrej/php PPA** automatically; weekly updates upgrade PHP when a
+  new panel release raises the floor.
 - A domain on **Cloudflare** (zone active).
 - A **Cloudflare API token** (https://dash.cloudflare.com/profile/api-tokens →
   Create Custom Token): Zone → Zone/DNS/SSL-and-Certificates (Read/Edit/Edit),

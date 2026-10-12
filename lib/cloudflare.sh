@@ -539,6 +539,11 @@ cf_ensure_certs() {
   chmod 644 "$cert"
   chmod 600 "$key"
   log "Origin CA certificate issued for $PANEL_FQDN."
+  # nginx keeps serving the old certificate from memory until it is reloaded.
+  if systemctl is-active --quiet nginx 2>/dev/null; then
+    systemctl reload nginx >/dev/null 2>&1 || restart_service nginx
+    log "nginx reloaded with the new origin certificate."
+  fi
 }
 
 cf_ensure_service() {
@@ -577,13 +582,20 @@ cf_full_ensure() {
 }
 
 cf_light_ensure() {
+  # The watchdog sources this file without running the install phase, so the
+  # tunnel id is empty here. Hydrate it from the credentials file first -
+  # otherwise the rendered config never matches and cloudflared gets restarted
+  # (and the CF API hit) on every single heal cycle.
+  if [ -z "$CF_TUNNEL_ID" ] && [ -f "$CF_CREDS_FILE" ]; then
+    CF_TUNNEL_ID=$(jq -r '.TunnelID // empty' "$CF_CREDS_FILE" 2>/dev/null)
+  fi
   if ! systemctl is-active --quiet cloudflared 2>/dev/null; then
     [ -f "$CF_CREDS_FILE" ] && [ -f "$CF_CFG_FILE" ] && cf_install_binary && cf_ensure_service || return 1
     return 0
   fi
   local tmp ok=0
   tmp=$(mktemp)
-  if cf_config_content "$tmp" && cmp -s "$tmp" "$CF_CFG_FILE"; then
+  if [ -n "$CF_TUNNEL_ID" ] && cf_config_content "$tmp" && cmp -s "$tmp" "$CF_CFG_FILE"; then
     ok=1
   fi
   rm -f "$tmp"
@@ -593,7 +605,6 @@ cf_light_ensure() {
   fi
   if cf_cert_expiring "$PANEL_TLS_DIR/panel/fullchain.pem"; then
     cf_ensure_certs || return 1
-    restart_service nginx
   fi
   return 0
 }

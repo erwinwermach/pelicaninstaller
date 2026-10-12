@@ -18,6 +18,11 @@ hlog() {
 
 hlog "heal run starting"
 
+if installer_running; then
+  hlog "installer is running - skipping this cycle"
+  exit 0
+fi
+
 wait_network 120 || { hlog "no network - retrying next cycle"; exit 0; }
 
 if [ ! -f "$CONF_FILE" ]; then
@@ -82,6 +87,11 @@ core_services() {
       hlog "FAILED to bring up $svc"
     fi
   done
+  if systemctl cat pelican-queue.service >/dev/null 2>&1; then
+    if ! ensure_service pelican-queue 2; then
+      hlog "FAILED to bring up pelican-queue"
+    fi
+  fi
 }
 
 core_services
@@ -107,17 +117,17 @@ else
   fi
 fi
 
-if ! curl -k -sS -m 10 -o /dev/null https://127.0.0.1:8443/ 2>/dev/null; then
-  hlog "panel unreachable - restarting nginx and php-fpm"
+if ! curl -k -fsS -m 10 -o /dev/null https://127.0.0.1:8443/ 2>/dev/null; then
+  hlog "panel unreachable or erroring - restarting nginx and php-fpm"
   restart_service "$PHP_FPM"
   restart_service nginx
   sleep 3
-  curl -k -sS -m 10 -o /dev/null https://127.0.0.1:8443/ 2>/dev/null || hlog "panel still unreachable"
+  curl -k -fsS -m 10 -o /dev/null https://127.0.0.1:8443/ 2>/dev/null || hlog "panel still unreachable"
 fi
 
 if [ -f "$PELICAN_ETC/config.yml" ]; then
-  if ! curl -sS -m 10 -o /dev/null http://127.0.0.1:8080/api/system 2>/dev/null; then
-    hlog "wings API unreachable - restarting wings"
+  if ! curl -fsS -m 10 -o /dev/null http://127.0.0.1:8080/api/system 2>/dev/null; then
+    hlog "wings API unreachable or erroring - restarting wings"
     restart_service wings
   fi
 fi
@@ -146,6 +156,7 @@ foreach (\App\Models\Role::getPermissionList() as \$model => \$prefixes) {
     panel_patch_navigation >>"$INSTALL_LOG" 2>&1 || true
     # shellcheck source=../lib/plugins.sh
     . "$HEAL_DIR/lib/plugins.sh"
+    plugins_ensure_installed >>"$INSTALL_LOG" 2>&1 || true
     plugins_reconcile >>"$INSTALL_LOG" 2>&1 || true
     plugins_patch_modpack >>"$INSTALL_LOG" 2>&1 || true
     # shellcheck source=../lib/eggs.sh
@@ -211,6 +222,7 @@ write_health_json() {
   local disk_used
   disk_used=$(df -Pk / | awk 'NR==2 {gsub(/%/,"",$5); print $5}')
   mkdir -p /var/www/pelican/storage/app
+  local tmp="/var/www/pelican/storage/app/.pelican-health.json.tmp.$$"
   {
     echo "{"
     echo "  \"last_heal\": \"$(date -Is)\","
@@ -240,8 +252,14 @@ write_health_json() {
     echo ""
     echo "  }"
     echo "}"
-  } > /var/www/pelican/storage/app/pelican-health.json 2>/dev/null || true
-  chown www-data:www-data /var/www/pelican/storage/app/pelican-health.json 2>/dev/null || true
+  } > "$tmp" 2>/dev/null || { rm -f "$tmp"; return 0; }
+  if ! jq -e . "$tmp" >/dev/null 2>&1; then
+    rm -f "$tmp"
+    return 0
+  fi
+  chown www-data:www-data "$tmp" 2>/dev/null || true
+  chmod 644 "$tmp" 2>/dev/null || true
+  mv -f "$tmp" /var/www/pelican/storage/app/pelican-health.json 2>/dev/null || rm -f "$tmp"
 }
 
 write_health_json
