@@ -17,6 +17,10 @@ if installer_running; then
   log "installer is running - skipping this cycle"
   exit 0
 fi
+# Hold the installer lock for the whole update so heal cycles (and the
+# self-update tree swap at the end) can never overlap with this run.
+exec 8>"$LOCK_DIR/pelican-installer.lock"
+flock -n 8 || { log "could not acquire the installer lock - skipping this cycle"; exit 0; }
 wait_network 60 || { log "no network - skipping"; exit 0; }
 [ -f "$CONF_FILE" ] || { log "not configured - skipping"; exit 0; }
 
