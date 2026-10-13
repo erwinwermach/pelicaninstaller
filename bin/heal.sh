@@ -188,7 +188,7 @@ fi
 # shellcheck source=../lib/jarfix.sh
 . "$HEAL_DIR/lib/jarfix.sh"
 process_repair_requests
-server_jars_fix
+run_with_heartbeat "server jar scan/repair" 2400 server_jars_fix || hlog "jar fixer reported problems"
 server_permissions_fix
 
 # TACZ (Timeless And Classics Zero) gun-pack mod: once its packs are extracted,
@@ -211,7 +211,7 @@ server_tacz_fix
 
 # shellcheck source=../lib/perfctl.sh
 . "$HEAL_DIR/lib/perfctl.sh"
-perf_scan
+run_with_heartbeat "performance scan" 900 perf_scan || hlog "performance scan reported problems"
 perfctl_process_requests
 
 # shellcheck source=../lib/crashscan.sh

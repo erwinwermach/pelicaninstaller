@@ -26,8 +26,9 @@ cf_install_binary() {
     return 0
   fi
   log "Installing cloudflared..."
-  curl -fsSL -m 120 -o "$CF_BIN" \
-    "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-$(arch_map)" >>"$INSTALL_LOG" 2>&1 \
+  run_with_heartbeat "cloudflared download" 600 \
+    curl -fsSL -m 300 -o "$CF_BIN" \
+    "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-$(arch_map)" \
     || return 1
   chmod +x "$CF_BIN"
 }
@@ -443,9 +444,11 @@ cf_ensure_dns() {
 }
 
 upnp_ensure() {
-  command -v upnpc >/dev/null 2>&1 || apt-get install -y miniupnpc >>"$INSTALL_LOG" 2>&1 || return 0
+  command -v upnpc >/dev/null 2>&1 || run_with_heartbeat "miniupnpc install" 600 \
+    apt-get -y -o DPkg::Lock::Timeout=300 install miniupnpc || return 0
+  command -v upnpc >/dev/null 2>&1 || return 0
   local ext
-  ext=$(upnpc -s 2>/dev/null | awk '/ExternalIPAddress/ {print $3}')
+  ext=$(timeout 10 upnpc -s 2>/dev/null | awk '/ExternalIPAddress/ {print $3}')
   if [ -z "$ext" ]; then
     log "Router UPnP not available. Enable UPnP on the router or add manual port forwards:"
     log "  ${GAME_PORTS:-25565-25575} TCP+UDP and 2022 TCP -> $(ip route get 1.1.1.1 2>/dev/null | awk '{print $7; exit}')"
@@ -460,11 +463,11 @@ upnp_ensure() {
   lan_ip=$(ip route get 1.1.1.1 2>/dev/null | awk '{print $7; exit}')
   for port in $(expand_ports "${GAME_PORTS:-25565-25575}"); do
     total=$((total + 2))
-    upnpc -a "$lan_ip" "$port" "$port" TCP >>"$INSTALL_LOG" 2>&1 && count=$((count + 1))
-    upnpc -a "$lan_ip" "$port" "$port" UDP >>"$INSTALL_LOG" 2>&1 && count=$((count + 1))
+    timeout 15 upnpc -a "$lan_ip" "$port" "$port" TCP >>"$INSTALL_LOG" 2>&1 && count=$((count + 1))
+    timeout 15 upnpc -a "$lan_ip" "$port" "$port" UDP >>"$INSTALL_LOG" 2>&1 && count=$((count + 1))
   done
   total=$((total + 1))
-  upnpc -a "$lan_ip" 2022 2022 TCP >>"$INSTALL_LOG" 2>&1 && count=$((count + 1))
+  timeout 15 upnpc -a "$lan_ip" 2022 2022 TCP >>"$INSTALL_LOG" 2>&1 && count=$((count + 1))
   log "UPnP port mappings ensured ($count/$total): ${GAME_PORTS:-25565-25575} TCP+UDP per port + 2022."
 }
 

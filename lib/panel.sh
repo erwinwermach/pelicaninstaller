@@ -8,12 +8,15 @@ ensure_php_ppa() {
     fi
   done
   log "No PHP 8.4+ in the configured apt sources - adding the ondrej/php PPA..."
-  apt-get install -y software-properties-common >>"$INSTALL_LOG" 2>&1 || true
-  LC_ALL=C.UTF-8 add-apt-repository -y ppa:ondrej/php >>"$INSTALL_LOG" 2>&1 || {
+  run_with_heartbeat "software-properties-common install" 600 \
+    apt-get -y -o DPkg::Lock::Timeout=300 install software-properties-common || true
+  run_with_heartbeat "adding the ondrej/php PPA" 300 \
+    env LC_ALL=C.UTF-8 add-apt-repository -y ppa:ondrej/php || {
     log_err "Could not add ppa:ondrej/php (network or apt problem)."
     return 1
   }
-  apt-get update -y >>"$INSTALL_LOG" 2>&1 || true
+  run_with_heartbeat "apt-get update (ondrej PPA)" 600 \
+    apt-get -y -o DPkg::Lock::Timeout=300 update || true
   for v in 8.5 8.4; do
     if apt-cache policy "php$v-fpm" 2>/dev/null | grep -qE 'Candidate: [0-9]'; then
       return 0
@@ -66,13 +69,15 @@ php_modules_install() {
   # its PHP floor); otherwise uses the recorded/installed version.
   local base="php${PHP_VER:-$(panel_php_version)}"
   local core_ok=0
-  apt-get install -y "$base-cli" "$base-fpm" "$base-gd" "$base-mysql" "$base-mbstring" \
-    "$base-bcmath" "$base-xml" "$base-curl" "$base-zip" "$base-intl" "$base-sqlite3" >>"$INSTALL_LOG" 2>&1 && core_ok=1
+  run_with_heartbeat "PHP $base modules install" 1800 \
+    apt-get -y -o DPkg::Lock::Timeout=600 install "$base-cli" "$base-fpm" "$base-gd" "$base-mysql" "$base-mbstring" \
+    "$base-bcmath" "$base-xml" "$base-curl" "$base-zip" "$base-intl" "$base-sqlite3" && core_ok=1
   if [ "$core_ok" = "0" ]; then
     for v in 8.5 8.4; do
       base="php$v"
-      apt-get install -y "$base-cli" "$base-fpm" "$base-gd" "$base-mysql" "$base-mbstring" \
-        "$base-bcmath" "$base-xml" "$base-curl" "$base-zip" "$base-intl" "$base-sqlite3" >>"$INSTALL_LOG" 2>&1 && { core_ok=1; break; }
+      run_with_heartbeat "PHP $base modules install (fallback)" 1800 \
+        apt-get -y -o DPkg::Lock::Timeout=600 install "$base-cli" "$base-fpm" "$base-gd" "$base-mysql" "$base-mbstring" \
+        "$base-bcmath" "$base-xml" "$base-curl" "$base-zip" "$base-intl" "$base-sqlite3" && { core_ok=1; break; }
     done
   fi
   apt-get install -y "$base-redis" >>"$INSTALL_LOG" 2>&1 || apt-get install -y php-redis >>"$INSTALL_LOG" 2>&1 || true
@@ -121,7 +126,8 @@ mariadb_datadir_ensure() {
   rm -rf "$dd"/*
   chown mysql:mysql "$dd"
   chmod 750 "$dd"
-  if su -s /bin/bash mysql -c "mariadb-install-db --datadir='$dd' --user=mysql" >>"$INSTALL_LOG" 2>&1; then
+  if run_with_heartbeat "MariaDB data directory init" 600 \
+       su -s /bin/bash mysql -c "mariadb-install-db --datadir='$dd' --user=mysql"; then
     log "MariaDB system schema initialized."
   else
     log_err "MariaDB datadir initialization failed - starting anyway, service start may fail."
@@ -153,7 +159,8 @@ panel_phase() {
   php_modules_install || die "Failed to install PHP modules."
 
   log "Installing MariaDB, Redis and Nginx..."
-  apt-get install -y mariadb-server mariadb-client redis-server nginx >>"$INSTALL_LOG" 2>&1 \
+  run_with_heartbeat "MariaDB/Redis/Nginx install" 1800 \
+    apt-get -y -o DPkg::Lock::Timeout=600 install mariadb-server mariadb-client redis-server nginx \
     || die "Failed to install database/webserver packages."
 
   log "Ensuring the mysql system account is usable (expired accounts block mariadbd startup)..."
@@ -194,12 +201,13 @@ panel_phase() {
   mkdir -p "$PANEL_DIR"
   local panel_tar
   panel_tar=$(mktemp /tmp/panel-setup.XXXXXX.tar.gz)
-  if ! curl -fsSL -m 300 -o "$panel_tar" "https://github.com/pelican-dev/panel/releases/latest/download/panel.tar.gz" >>"$INSTALL_LOG" 2>&1 \
+  if ! run_with_heartbeat "Panel download" 600 \
+       curl -fsSL -m 300 -o "$panel_tar" "https://github.com/pelican-dev/panel/releases/latest/download/panel.tar.gz" \
      || [ "$(stat -c %s "$panel_tar" 2>/dev/null || echo 0)" -lt 1000000 ]; then
     rm -f "$panel_tar"
     die "Failed to download panel (or the download was truncated). Retry when GitHub is reachable."
   fi
-  tar -xzf "$panel_tar" -C "$PANEL_DIR" >>"$INSTALL_LOG" 2>&1 || { rm -f "$panel_tar"; die "Failed to extract panel."; }
+  run_with_heartbeat "Panel extraction" 600 tar -xzf "$panel_tar" -C "$PANEL_DIR" || { rm -f "$panel_tar"; die "Failed to extract panel."; }
   rm -f "$panel_tar"
 
   local req_php cur_php
@@ -216,8 +224,10 @@ panel_phase() {
     || die "Failed to install composer."
 
   log "Installing panel dependencies (this can take several minutes)..."
-  (cd "$PANEL_DIR" && COMPOSER_ALLOW_SUPERUSER=1 composer install --no-dev --optimize-autoloader --no-interaction) >>"$INSTALL_LOG" 2>&1 \
-    || die "Composer install failed."
+  run_heartbeat_sh "composer install" 2400 \
+    'cd "$1" && COMPOSER_ALLOW_SUPERUSER=1 composer install --no-dev --optimize-autoloader --no-interaction' \
+    "$PANEL_DIR" \
+    || die "Composer install failed (see $INSTALL_LOG)."
 
   log "Writing panel environment..."
   write_panel_env "$db_password" || die "Failed to write panel .env"
@@ -232,7 +242,8 @@ panel_phase() {
   grep -q '^APP_KEY=base64' "$PANEL_DIR/.env" || die "Failed to set APP_KEY"
 
   log "Migrating database and seeding eggs..."
-  (cd "$PANEL_DIR" && php artisan migrate --seed --force) >>"$INSTALL_LOG" 2>&1 \
+  run_heartbeat_sh "panel database migration" 1800 \
+    'cd "$1" && php artisan migrate --seed --force' "$PANEL_DIR" \
     || log_err "Database migrate failed - the web installer at /installer will retry it."
 
   log "Setting permissions..."
@@ -410,6 +421,9 @@ admin_phase() {
       fi
       sleep 10
       waited=$((waited + 10))
+      if [ $((waited % 60)) -eq 0 ]; then
+        log "still waiting for the setup wizard (${waited}s/600s) at https://$PANEL_FQDN/installer..."
+      fi
     done
     log_err "Timed out waiting for the setup wizard. Complete it at https://$PANEL_FQDN/installer then re-run the installer to resume."
   fi
@@ -436,7 +450,8 @@ panel_db_guard() {
     mkdir -p "$PI_ROOT"
     echo "DB_PASSWORD=$db_password" > "$SECRETS_FILE"
     chmod 600 "$SECRETS_FILE"
-    (cd "$PANEL_DIR" && php artisan migrate --seed --force) >>"$INSTALL_LOG" 2>&1 || true
+    run_heartbeat_sh "panel database migration (MariaDB restore)" 1800 \
+      'cd "$1" && php artisan migrate --seed --force' "$PANEL_DIR" || true
     log "Panel database restored to MariaDB."
   fi
 }
@@ -587,8 +602,9 @@ PY
   fi
 
   if [ "$changed" = "1" ]; then
-    (cd "$PANEL_DIR" && COMPOSER_ALLOW_SUPERUSER=1 "$php_bin" artisan optimize:clear) >>"$INSTALL_LOG" 2>&1 || true
-    (cd "$PANEL_DIR" && COMPOSER_ALLOW_SUPERUSER=1 "$php_bin" artisan view:clear) >>"$INSTALL_LOG" 2>&1 || true
+    run_heartbeat_sh "panel cache clear" 600 \
+      'cd "$1" && COMPOSER_ALLOW_SUPERUSER=1 "$2" artisan optimize:clear && COMPOSER_ALLOW_SUPERUSER=1 "$2" artisan view:clear' \
+      "$PANEL_DIR" "$php_bin" || true
     restart_service "php$(panel_php_version)-fpm"
   fi
   return 0

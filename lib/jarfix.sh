@@ -32,7 +32,9 @@ except Exception:
     pass
 ') || jar_url=""
   [ -n "$jar_url" ] || return 1
-  if curl -fsSL -m 300 -o "$srvdir/minecraft-server.jar.tmp" "$jar_url" 2>/dev/null && [ "$(stat -c %s "$srvdir/minecraft-server.jar.tmp" 2>/dev/null || echo 0)" -gt 1000000 ]; then
+  if run_with_heartbeat "game jar download ($mc)" 600 \
+       curl -fsSL -m 300 -o "$srvdir/minecraft-server.jar.tmp" "$jar_url" \
+     && [ "$(stat -c %s "$srvdir/minecraft-server.jar.tmp" 2>/dev/null || echo 0)" -gt 1000000 ]; then
     rm -f "$srvdir/minecraft-server.jar" "$srvdir/server.jar"
     mv "$srvdir/minecraft-server.jar.tmp" "$srvdir/minecraft-server.jar"
     ln -sfn minecraft-server.jar "$srvdir/server.jar"
@@ -64,11 +66,12 @@ fabric_install_inplace() {
   local srvdir=$1 mc=$2 ldr=$3 launch_jar=""
   log "Server $1: installing Fabric $mc/$ldr directly into the volume..."
   fabric_installer_ensure || { log_err "Server $1: could not fetch fabric installer."; return 1; }
-  if ! docker run --rm \
-      -v "$srvdir:/data:rw" \
-      -v "$FABRIC_INSTALLER_JAR:/fabric-installer.jar:ro" \
-      -w /data ghcr.io/pelican-eggs/yolks:java_25 \
-      java -jar /fabric-installer.jar server -mcversion "$mc" -loader "$ldr" -dir /data >/dev/null 2>&1; then
+  if ! run_with_heartbeat "fabric installer (image pull may take a while)" 1200 \
+       docker run --rm \
+       -v "$srvdir:/data:rw" \
+       -v "$FABRIC_INSTALLER_JAR:/fabric-installer.jar:ro" \
+       -w /data ghcr.io/pelican-eggs/yolks:java_25 \
+       java -jar /fabric-installer.jar server -mcversion "$mc" -loader "$ldr" -dir /data; then
     log_err "Server $1: fabric installer failed for $mc/$ldr - check https://fabricmc.net/versions"
     return 1
   fi

@@ -52,10 +52,12 @@ if [ -f "$PANEL_DIR/artisan" ] && [ -f "$PANEL_DIR/.env" ] && grep -q '^APP_INST
     PANEL_MAINT=1
   fi
   panel_tar=$(mktemp /tmp/panel-update.XXXXXX.tar.gz)
-  if curl -fsSL -m 300 -o "$panel_tar" \
-      "https://github.com/pelican-dev/panel/releases/latest/download/panel.tar.gz" >>"$INSTALL_LOG" 2>&1 \
+  if run_with_heartbeat "Panel download" 600 \
+       curl -fsSL -m 300 -o "$panel_tar" \
+       "https://github.com/pelican-dev/panel/releases/latest/download/panel.tar.gz" \
      && [ "$(stat -c %s "$panel_tar" 2>/dev/null || echo 0)" -gt 1000000 ]; then
-    tar -xzf "$panel_tar" -C "$PANEL_DIR" >>"$INSTALL_LOG" 2>&1 || log_err "Panel tarball extraction reported errors."
+    run_with_heartbeat "Panel extraction" 600 tar -xzf "$panel_tar" -C "$PANEL_DIR" \
+      || log_err "Panel tarball extraction reported errors."
     # shellcheck source=../lib/panel.sh
     . "$UPD_DIR/lib/panel.sh"
     req_php=$(panel_php_requirement)
@@ -77,12 +79,16 @@ if [ -f "$PANEL_DIR/artisan" ] && [ -f "$PANEL_DIR/.env" ] && grep -q '^APP_INST
       fi
     fi
     chmod -R 755 "$PANEL_DIR/storage" "$PANEL_DIR/bootstrap/cache" || log_err "Could not fix panel storage permissions."
-    (cd "$PANEL_DIR" && COMPOSER_ALLOW_SUPERUSER=1 composer install --no-dev --optimize-autoloader --no-interaction) >>"$INSTALL_LOG" 2>&1 || log_err "composer install failed - panel may be incomplete."
+    run_heartbeat_sh "composer install" 2400 \
+      'cd "$1" && COMPOSER_ALLOW_SUPERUSER=1 composer install --no-dev --optimize-autoloader --no-interaction' \
+      "$PANEL_DIR" || log_err "composer install failed - panel may be incomplete."
     (cd "$PANEL_DIR" && php artisan storage:link) >>"$INSTALL_LOG" 2>&1 || true
     # shellcheck source=../lib/tune.sh
     . "$UPD_DIR/lib/tune.sh"
     panel_optimize || true
-    (cd "$PANEL_DIR" && php artisan migrate --seed --force) >>"$INSTALL_LOG" 2>&1 || log_err "Panel migrations failed - check the panel logs."
+    run_heartbeat_sh "panel database migration" 1800 \
+      'cd "$1" && php artisan migrate --seed --force' "$PANEL_DIR" \
+      || log_err "Panel migrations failed - check the panel logs."
     (cd "$PANEL_DIR" && php artisan queue:restart) >>"$INSTALL_LOG" 2>&1 || true
     chown -R www-data:www-data "$PANEL_DIR" || log_err "Could not reset panel ownership."
     (cd "$PANEL_DIR" && php artisan up) >>"$INSTALL_LOG" 2>&1 || true
@@ -121,8 +127,9 @@ fi
 if [ -f "$PELICAN_ETC/config.yml" ]; then
   log "Updating Wings..."
   wings_tmp=$(mktemp /tmp/wings-new.XXXXXX)
-  if curl -fsSL -m 300 -o "$wings_tmp" \
-      "https://github.com/pelican-dev/wings/releases/latest/download/wings_linux_$(arch_map)" >>"$INSTALL_LOG" 2>&1 \
+  if run_with_heartbeat "Wings download" 600 \
+       curl -fsSL -m 300 -o "$wings_tmp" \
+       "https://github.com/pelican-dev/wings/releases/latest/download/wings_linux_$(arch_map)" \
      && [ "$(stat -c %s "$wings_tmp" 2>/dev/null || echo 0)" -gt 5000000 ]; then
     chmod +x "$wings_tmp"
     if ! cmp -s "$wings_tmp" "$WINGS_BIN"; then
@@ -152,7 +159,7 @@ if [ -x "$CF_BIN" ] && [ -n "${CF_API_TOKEN:-}" ]; then
 fi
 
 log "Pruning dangling docker images..."
-docker image prune -f >>"$INSTALL_LOG" 2>&1 || true
+run_with_heartbeat "docker image prune" 600 docker image prune -f || true
 
 log "Refreshing installer scripts from GitHub..."
 self_update

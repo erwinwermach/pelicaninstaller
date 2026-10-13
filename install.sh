@@ -30,7 +30,7 @@ TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
 echo "Downloading pelican-installer..."
-curl -fsSL "$REPO_URL" -o "$TMP/repo.tar.gz" || {
+curl -fsSL -m 300 "$REPO_URL" -o "$TMP/repo.tar.gz" || {
   echo "Download failed: $REPO_URL" >&2
   echo "If this repository was moved, export the new URL: PELICAN_REPO_URL=https://github.com/user/repo/archive/refs/heads/main.tar.gz" >&2
   exit 1

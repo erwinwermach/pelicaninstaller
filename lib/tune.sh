@@ -107,12 +107,9 @@ ufw_port_tokens() {
 
 panel_optimize() {
   [ -f "$PANEL_DIR/artisan" ] || return 0
-  (
-    cd "$PANEL_DIR" && \
-    COMPOSER_ALLOW_SUPERUSER=1 php artisan optimize && \
-    COMPOSER_ALLOW_SUPERUSER=1 php artisan filament:optimize && \
-    COMPOSER_ALLOW_SUPERUSER=1 php artisan icons:cache
-  ) >>"$INSTALL_LOG" 2>&1 || {
+  run_heartbeat_sh "panel optimization (caches)" 900 \
+    'cd "$1" && COMPOSER_ALLOW_SUPERUSER=1 php artisan optimize && COMPOSER_ALLOW_SUPERUSER=1 php artisan filament:optimize && COMPOSER_ALLOW_SUPERUSER=1 php artisan icons:cache' \
+    "$PANEL_DIR" || {
     log_err "Panel optimization step failed (non-fatal)."
     return 1
   }

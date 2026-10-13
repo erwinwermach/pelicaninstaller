@@ -78,11 +78,15 @@ eggs_phase() {
       continue
     fi
     log "Importing egg '$name' from $url"
-    local body code
-    body=$(curl -fsSL -m 60 "$url" 2>/dev/null) || {
+    local body code egg_tmp
+    egg_tmp=$(mktemp)
+    if ! run_with_heartbeat "egg download ($name)" 120 curl -fsSL -m 60 -o "$egg_tmp" "$url"; then
+      rm -f "$egg_tmp"
       log_err "Could not download egg '$name' from $url"
       continue
-    }
+    fi
+    body=$(cat "$egg_tmp")
+    rm -f "$egg_tmp"
     code=$(app_api_raw POST /eggs/import "$body")
     case "$code" in
       201|200)

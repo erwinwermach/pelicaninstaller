@@ -228,23 +228,26 @@ tty_secret() {
 }
 
 wait_network() {
-  # Up when any one of several independent endpoints answers - a box that can
-  # reach Ubuntu/GitHub but not Cloudflare (or vice versa) must not be declared
-  # offline. Prints progress so a slow link does not look like a hang.
-  local tries=${1:-30}
-  local i url
-  for i in $(seq 1 "$tries"); do
+  # Waits up to $1 seconds (default 60) for any one of several independent
+  # endpoints to answer - a box that can reach Ubuntu/GitHub but not Cloudflare
+  # (or vice versa) must not be declared offline. The overall deadline is
+  # enforced, so a hanging TCP path can not stall the installer.
+  local wait_s=${1:-60}
+  local deadline round=0 url
+  deadline=$(( $(date +%s) + wait_s ))
+  while [ "$(date +%s)" -lt "$deadline" ]; do
     for url in \
       "https://api.cloudflare.com/client/v4/" \
       "http://archive.ubuntu.com/ubuntu/" \
       "https://github.com/"; do
-      if curl -sS --connect-timeout 5 --max-time 8 -o /dev/null -w '%{http_code}' \
+      if curl -sS --connect-timeout 4 --max-time 6 -o /dev/null -w '%{http_code}' \
         "$url" 2>/dev/null | grep -qE '^[0-9]{3}$'; then
         return 0
       fi
     done
-    if [ $(( i % 5 )) -eq 0 ]; then
-      log "waiting for network connectivity (${i}/${tries})..."
+    round=$(( round + 1 ))
+    if [ $(( round % 15 )) -eq 0 ]; then
+      log "waiting for network connectivity ($(( deadline - $(date +%s) ))s left)..."
     fi
     sleep 2
   done
@@ -258,11 +261,16 @@ run_with_heartbeat() {
   local label=$1 timeout_s=$2
   shift 2
   "$@" >>"$INSTALL_LOG" 2>&1 &
-  local pid=$! waited=0 next_report=60 last_line
+  local pid=$! waited=0 ticks=0 next_report=60 last_line
+  local interval="${RUN_HEARTBEAT_INTERVAL:-15}"
+  [ "$interval" -ge 1 ] 2>/dev/null || interval=15
   log "$label started (timeout ${timeout_s}s) - live log: tail -f $INSTALL_LOG"
+  # Poll every second so short commands are not delayed by a full interval.
   while kill -0 "$pid" 2>/dev/null; do
-    sleep "${RUN_HEARTBEAT_INTERVAL:-15}"
-    waited=$(( waited + ${RUN_HEARTBEAT_INTERVAL:-15} ))
+    sleep 1
+    ticks=$(( ticks + 1 ))
+    [ $(( ticks % interval )) -eq 0 ] || continue
+    waited=$(( waited + interval ))
     if [ "$waited" -ge "$timeout_s" ]; then
       log_err "$label exceeded ${timeout_s}s - aborting it."
       kill "$pid" 2>/dev/null || true
@@ -278,6 +286,14 @@ run_with_heartbeat() {
     fi
   done
   wait "$pid"
+}
+
+run_heartbeat_sh() {
+  # run_with_heartbeat for a single shell command string; extra args are passed
+  # through as "$1", "$2", ... inside the string (avoids nested quoting).
+  local label=$1 timeout_s=$2 cmd=$3
+  shift 3
+  run_with_heartbeat "$label" "$timeout_s" bash -c "$cmd" _ "$@"
 }
 
 expand_ports() {
@@ -357,6 +373,7 @@ ensure_service() {
     if systemctl is-active --quiet "$svc"; then
       return 0
     fi
+    log "waiting for $svc to start (attempt ${i}/${tries})..."
     sleep 5
   done
   return 1
@@ -411,7 +428,8 @@ version_newer() {
 pi_fetch_update() {
   local tmp srcdir f
   tmp=$(mktemp -d)
-  if ! curl -fsSL -m 120 -o "$tmp/pi.tar.gz" "$PI_REPO_TARBALL"; then
+  if ! run_with_heartbeat "installer self-update download" 300 \
+       curl -fsSL -m 120 -o "$tmp/pi.tar.gz" "$PI_REPO_TARBALL"; then
     rm -rf "$tmp"
     return 1
   fi

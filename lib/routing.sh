@@ -199,11 +199,14 @@ playit_agent_ensure() {
     envfile=$(mktemp) || return 1
     chmod 600 "$envfile" 2>/dev/null || true
     printf 'SECRET_KEY=%s\n' "$PLAYIT_SECRET_KEY" > "$envfile" 2>/dev/null
-    docker run -d --restart unless-stopped --name playit-agent --net=host \
-      --env-file "$envfile" \
-      ghcr.io/playit-cloud/playit-agent:1.0 >>"$INSTALL_LOG" 2>&1 \
-      && log "playit agent (re)started." \
-      || log_err "playit agent failed to start - check 'docker logs playit-agent'."
+    if run_with_heartbeat "playit agent image pull + start" 900 \
+         docker run -d --restart unless-stopped --name playit-agent --net=host \
+         --env-file "$envfile" \
+         ghcr.io/playit-cloud/playit-agent:1.0; then
+      log "playit agent (re)started."
+    else
+      log_err "playit agent failed to start - check 'docker logs playit-agent'."
+    fi
     rm -f "$envfile"
   fi
   sleep 3
@@ -349,7 +352,8 @@ bore_install_binary() {
   local url tmp
   url=$(bore_download_url) || { log_err "bore: unsupported architecture."; return 1; }
   tmp=$(mktemp -d)
-  curl -fsSL -m 120 -o "$tmp/bore.tgz" "$url" >>"$INSTALL_LOG" 2>&1 || { rm -rf "$tmp"; log_err "bore download failed."; return 1; }
+  run_with_heartbeat "bore download" 600 \
+    curl -fsSL -m 300 -o "$tmp/bore.tgz" "$url" || { rm -rf "$tmp"; log_err "bore download failed."; return 1; }
   tar -xzf "$tmp/bore.tgz" -C "$tmp" >>"$INSTALL_LOG" 2>&1 || { rm -rf "$tmp"; return 1; }
   find "$tmp" -type f -name bore -exec cp -f {} "$BORE_BIN" \; 2>/dev/null
   rm -rf "$tmp"
@@ -450,15 +454,27 @@ frp_load_vps_config() {
 }
 
 frp_ssh() {
-  local cmd=$1
-  local ssh_args=(-p "$FRP_VPS_PORT" -o BatchMode=no -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10)
+  local cmd=$1 passfile rc
+  # ServerAlive* stops a dead VPS connection from hanging the installer forever.
+  local ssh_args=(-p "$FRP_VPS_PORT" -o BatchMode=no -o StrictHostKeyChecking=accept-new \
+    -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=4)
   [ -n "${FRP_VPS_KEY:-}" ] && ssh_args+=(-i "$FRP_VPS_KEY")
   if [ -n "${FRP_VPS_PASS:-}" ]; then
-    command -v sshpass >/dev/null 2>&1 || apt-get install -y sshpass >>"$INSTALL_LOG" 2>&1 || { log_err "sshpass unavailable."; return 1; }
-    sshpass -p "$FRP_VPS_PASS" ssh "${ssh_args[@]}" "$FRP_VPS_USER@$FRP_VPS_HOST" "$cmd"
-  else
-    ssh "${ssh_args[@]}" "$FRP_VPS_USER@$FRP_VPS_HOST" "$cmd"
+    command -v sshpass >/dev/null 2>&1 || run_with_heartbeat "sshpass install" 600 \
+      apt-get -y -o DPkg::Lock::Timeout=300 install sshpass || { log_err "sshpass unavailable."; return 1; }
+    # Keep the password out of the process list.
+    passfile=$(mktemp)
+    chmod 600 "$passfile" 2>/dev/null || true
+    printf '%s' "$FRP_VPS_PASS" > "$passfile"
+    if sshpass -f "$passfile" ssh "${ssh_args[@]}" "$FRP_VPS_USER@$FRP_VPS_HOST" "$cmd"; then
+      rc=0
+    else
+      rc=$?
+    fi
+    rm -f "$passfile"
+    return "$rc"
   fi
+  ssh "${ssh_args[@]}" "$FRP_VPS_USER@$FRP_VPS_HOST" "$cmd"
 }
 
 frp_token_file() {
@@ -492,7 +508,7 @@ frp_vps_deploy() {
     return 1
   }
 
-  log "Installing frps on the VPS (idempotent)..."
+  log "Installing frps on the VPS (idempotent; can take a few minutes - SSH output goes to $INSTALL_LOG)..."
   local game_ports_csv
   game_ports_csv=$(routing_ports | paste -sd,)
   frp_ssh "bash -s" <<REMOTE_SCRIPT >>"$INSTALL_LOG" 2>&1 || {
@@ -549,8 +565,9 @@ frp_install_client() {
   local arch ver="$FRP_VERSION" tmp
   arch=$(frp_arch_name) || return 1
   tmp=$(mktemp -d)
-  curl -fsSL -m 120 -o "$tmp/frp.tgz" \
-    "https://github.com/fatedier/frp/releases/download/$ver/frp_${ver#v}_${arch}.tar.gz" >>"$INSTALL_LOG" 2>&1 \
+  run_with_heartbeat "frpc download" 600 \
+    curl -fsSL -m 300 -o "$tmp/frp.tgz" \
+    "https://github.com/fatedier/frp/releases/download/$ver/frp_${ver#v}_${arch}.tar.gz" \
     || { rm -rf "$tmp"; return 1; }
   tar -xzf "$tmp/frp.tgz" -C "$tmp" >>"$INSTALL_LOG" 2>&1
   cp -f "$tmp/frp_${ver#v}_${arch}/frpc" "$FRPC_BIN" 2>/dev/null || { rm -rf "$tmp"; return 1; }

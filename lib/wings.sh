@@ -5,8 +5,10 @@ wings_install_docker() {
     return 0
   fi
   log "Installing Docker CE (this can take a few minutes)..."
-  curl -fsSL -m 120 https://get.docker.com -o /tmp/get-docker.sh >>"$INSTALL_LOG" 2>&1 || return 1
-  CHANNEL=stable sh /tmp/get-docker.sh >>"$INSTALL_LOG" 2>&1 || return 1
+  run_with_heartbeat "Docker repository download" 300 \
+    curl -fsSL -m 120 https://get.docker.com -o /tmp/get-docker.sh || return 1
+  run_with_heartbeat "Docker install script" 1800 \
+    env CHANNEL=stable sh /tmp/get-docker.sh || return 1
   systemctl enable docker >>"$INSTALL_LOG" 2>&1 || true
   ensure_service docker 6 || return 1
   wings_docker_daemon_tuning
@@ -36,8 +38,9 @@ wings_install_binary() {
     return 0
   fi
   log "Downloading Wings..."
-  curl -fsSL -m 120 -o "$WINGS_BIN" \
-    "https://github.com/pelican-dev/wings/releases/latest/download/wings_linux_$(arch_map)" >>"$INSTALL_LOG" 2>&1 \
+  run_with_heartbeat "Wings download" 600 \
+    curl -fsSL -m 300 -o "$WINGS_BIN" \
+    "https://github.com/pelican-dev/wings/releases/latest/download/wings_linux_$(arch_map)" \
     || return 1
   chmod +x "$WINGS_BIN"
 }

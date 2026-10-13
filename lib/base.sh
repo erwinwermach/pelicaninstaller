@@ -4,7 +4,7 @@ base_phase() {
   export NEEDRESTART_MODE=a
 
   log "Checking network connectivity..."
-  wait_network 30 || die "No network access. Fix connectivity and re-run."
+  wait_network 120 || die "No network access. Fix connectivity and re-run."
 
   log "Updating Ubuntu package lists..."
   run_with_heartbeat "apt-get update" 600 \
@@ -27,7 +27,9 @@ base_phase() {
   log "Configuring swap..."
   if ! swapon --show 2>/dev/null | grep -q .; then
     if [ ! -f /swapfile ]; then
-      fallocate -l 2G /swapfile 2>/dev/null || dd if=/dev/zero of=/swapfile bs=1M count=2048 >>"$INSTALL_LOG" 2>&1 || true
+      fallocate -l 2G /swapfile 2>/dev/null \
+        || run_with_heartbeat "swapfile creation (dd)" 900 dd if=/dev/zero of=/swapfile bs=1M count=2048 \
+        || true
     fi
     if [ -f /swapfile ]; then
       chmod 600 /swapfile
