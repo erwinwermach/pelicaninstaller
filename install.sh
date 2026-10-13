@@ -2,11 +2,22 @@
 set -euo pipefail
 
 REPO_URL="${PELICAN_REPO_URL:-https://github.com/erwinwermach/pelicaninstaller/archive/refs/heads/main.tar.gz}"
+VERSION_URL="${PELICAN_VERSION_URL:-${REPO_URL%/archive/refs/heads/*}/raw/main/VERSION}"
 
 DST=/opt/pelican-installer
 
+# Run the installed copy only when it matches the published version. A stale
+# copy can be broken in ways that prevent its own self-update (e.g. an
+# installer.conf that the old code cannot load), so a fresh bootstrap must be
+# able to replace it. Network failure falls back to the installed copy.
 if [ -x "$DST/installer.sh" ] && bash -n "$DST/installer.sh" 2>/dev/null; then
-  exec bash "$DST/installer.sh" "$@"
+  local_v=$(tr -d ' \t\r\n' < "$DST/VERSION" 2>/dev/null || true)
+  remote_v=$(curl -fsSL -m 20 "$VERSION_URL" 2>/dev/null | tr -d ' \t\r\n' || true)
+  if [ -n "$remote_v" ] && [ "$remote_v" != "$local_v" ]; then
+    echo "Installer at $DST is ${local_v:-unknown}, latest is $remote_v - refreshing..."
+  else
+    exec bash "$DST/installer.sh" "$@"
+  fi
 fi
 
 # Serialize concurrent bootstraps so two runs cannot interleave the download.
