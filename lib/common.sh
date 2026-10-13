@@ -26,6 +26,11 @@ FRPC_BIN="${FRPC_BIN:-/usr/local/bin/frpc}"
 TUNNEL_NAME_PREFIX=pelican
 LOCK_DIR="${LOCK_DIR:-/run/lock}"
 
+# Automation-safe apt defaults: never prompt and never stop for the needrestart
+# "restart services?" dialog (a classic invisible hang in unattended installs).
+export DEBIAN_FRONTEND="${DEBIAN_FRONTEND:-noninteractive}"
+export NEEDRESTART_MODE="${NEEDRESTART_MODE:-a}"
+
 conf_sanitize() {
   # Re-quote an installer.conf that cannot be sourced as-is. Real-world case:
   # a CurseForge API key starts with "$2a$10$...", so an unquoted KEY=value
@@ -223,16 +228,56 @@ tty_secret() {
 }
 
 wait_network() {
+  # Up when any one of several independent endpoints answers - a box that can
+  # reach Ubuntu/GitHub but not Cloudflare (or vice versa) must not be declared
+  # offline. Prints progress so a slow link does not look like a hang.
   local tries=${1:-30}
-  local i
+  local i url
   for i in $(seq 1 "$tries"); do
-    if curl -sS --connect-timeout 5 --max-time 8 -o /dev/null -w '%{http_code}' \
-      https://api.cloudflare.com/client/v4/ 2>/dev/null | grep -qE '^[0-9]{3}$'; then
-      return 0
+    for url in \
+      "https://api.cloudflare.com/client/v4/" \
+      "http://archive.ubuntu.com/ubuntu/" \
+      "https://github.com/"; do
+      if curl -sS --connect-timeout 5 --max-time 8 -o /dev/null -w '%{http_code}' \
+        "$url" 2>/dev/null | grep -qE '^[0-9]{3}$'; then
+        return 0
+      fi
+    done
+    if [ $(( i % 5 )) -eq 0 ]; then
+      log "waiting for network connectivity (${i}/${tries})..."
     fi
     sleep 2
   done
   return 1
+}
+
+run_with_heartbeat() {
+  # Run a long, quiet command in the background while logging a heartbeat
+  # (elapsed time + the command's latest log line) every minute, and kill it
+  # after $timeout_s seconds. Turns invisible apt/composer hangs into progress.
+  local label=$1 timeout_s=$2
+  shift 2
+  "$@" >>"$INSTALL_LOG" 2>&1 &
+  local pid=$! waited=0 next_report=60 last_line
+  log "$label started (timeout ${timeout_s}s) - live log: tail -f $INSTALL_LOG"
+  while kill -0 "$pid" 2>/dev/null; do
+    sleep "${RUN_HEARTBEAT_INTERVAL:-15}"
+    waited=$(( waited + ${RUN_HEARTBEAT_INTERVAL:-15} ))
+    if [ "$waited" -ge "$timeout_s" ]; then
+      log_err "$label exceeded ${timeout_s}s - aborting it."
+      kill "$pid" 2>/dev/null || true
+      sleep 2
+      kill -9 "$pid" 2>/dev/null || true
+      wait "$pid" 2>/dev/null || true
+      return 124
+    fi
+    if [ "$waited" -ge "$next_report" ]; then
+      next_report=$(( next_report + 60 ))
+      last_line=$(tail -n 1 "$INSTALL_LOG" 2>/dev/null | tr -d '\r' || true)
+      log "$label still running (${waited}s): ${last_line:0:140}"
+    fi
+  done
+  wait "$pid"
 }
 
 expand_ports() {

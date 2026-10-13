@@ -37,10 +37,13 @@ restore_panel_on_exit() {
 trap restore_panel_on_exit EXIT
 
 log "Updating Ubuntu packages..."
-apt-get update -y >>"$INSTALL_LOG" 2>&1 || true
-apt-get full-upgrade -y >>"$INSTALL_LOG" 2>&1 || true
+run_with_heartbeat "apt-get update" 600 \
+  apt-get -y -o DPkg::Lock::Timeout=300 update || true
+run_with_heartbeat "apt-get full-upgrade" 10800 \
+  apt-get -y -o DPkg::Lock::Timeout=600 -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold full-upgrade || true
 dpkg --configure -a >>"$INSTALL_LOG" 2>&1 || true
-apt-get autoremove --purge -y >>"$INSTALL_LOG" 2>&1 || true
+run_with_heartbeat "apt-get autoremove" 1200 \
+  apt-get -y -o DPkg::Lock::Timeout=300 autoremove --purge || true
 apt-get clean >>"$INSTALL_LOG" 2>&1 || true
 
 if [ -f "$PANEL_DIR/artisan" ] && [ -f "$PANEL_DIR/.env" ] && grep -q '^APP_INSTALLED=true' "$PANEL_DIR/.env"; then

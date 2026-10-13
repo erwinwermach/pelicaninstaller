@@ -1,16 +1,28 @@
 base_phase() {
   banner "Phase 2 - Base system update"
   export DEBIAN_FRONTEND=noninteractive
+  export NEEDRESTART_MODE=a
 
-  log "Updating Ubuntu..."
-  wait_network 60 || die "No network access. Fix connectivity and re-run."
-  apt-get update -y >>"$INSTALL_LOG" 2>&1 || true
-  apt-get full-upgrade -y >>"$INSTALL_LOG" 2>&1 || true
+  log "Checking network connectivity..."
+  wait_network 30 || die "No network access. Fix connectivity and re-run."
+
+  log "Updating Ubuntu package lists..."
+  run_with_heartbeat "apt-get update" 600 \
+    apt-get -y -o DPkg::Lock::Timeout=300 update \
+    || log_err "apt-get update had problems - continuing with the existing package lists."
+
+  log "Upgrading all installed packages (a first run on a fresh server can take 10-40+ minutes; progress is written to $INSTALL_LOG)..."
+  run_with_heartbeat "apt-get full-upgrade" 10800 \
+    apt-get -y -o DPkg::Lock::Timeout=600 -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold full-upgrade \
+    || log_err "apt-get full-upgrade had problems - continuing."
+  dpkg --configure -a >>"$INSTALL_LOG" 2>&1 || true
 
   log "Installing base packages..."
-  apt-get install -y curl wget git unzip zip tar xz-utils gnupg ca-certificates \
+  run_with_heartbeat "base package install" 1800 \
+    apt-get -y -o DPkg::Lock::Timeout=600 install curl wget git unzip zip tar xz-utils gnupg ca-certificates \
     software-properties-common lsb-release ufw fail2ban unattended-upgrades jq \
-    openssl dnsutils >>"$INSTALL_LOG" 2>&1 || die "Failed to install base packages."
+    openssl dnsutils \
+    || die "Failed to install base packages."
 
   log "Configuring swap..."
   if ! swapon --show 2>/dev/null | grep -q .; then
