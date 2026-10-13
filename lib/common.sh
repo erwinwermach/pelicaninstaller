@@ -26,9 +26,63 @@ FRPC_BIN="${FRPC_BIN:-/usr/local/bin/frpc}"
 TUNNEL_NAME_PREFIX=pelican
 LOCK_DIR="${LOCK_DIR:-/run/lock}"
 
-set -a
-[ -f "$CONF_FILE" ] && . "$CONF_FILE"
-set +a
+conf_sanitize() {
+  # Re-quote an installer.conf that cannot be sourced as-is. Real-world case:
+  # a CurseForge API key starts with "$2a$10$...", so an unquoted KEY=value
+  # line makes the shell expand $2 - fatal under `set -u`. Every KEY=value
+  # line is rewritten with printf %q so values are always literal on source.
+  local file=$1 tmp
+  [ -f "$file" ] || return 0
+  tmp=$(mktemp) || return 1
+  local line key val
+  while IFS= read -r line || [ -n "$line" ]; do
+    line=${line%$'\r'}
+    case "$line" in
+      ''|\#*) printf '%s\n' "$line" >> "$tmp"; continue ;;
+    esac
+    key=${line%%=*}
+    case "$key" in
+      export\ *) key=${key#export } ;;
+    esac
+    if [ "$key" = "$line" ] || ! printf '%s' "$key" | grep -qE '^[A-Za-z_][A-Za-z0-9_]*$'; then
+      printf '# %s\n' "$line" >> "$tmp"
+      continue
+    fi
+    val=${line#*=}
+    val=${val%$'\r'}
+    case "$val" in
+      \"*\") val=${val#\"}; val=${val%\"} ;;
+      \'*\') val=${val#\'}; val=${val%\'} ;;
+    esac
+    printf '%s=%q\n' "$key" "$val" >> "$tmp"
+  done < "$file"
+  if ( set -u; . "$tmp" ) >/dev/null 2>&1; then
+    cp -f "$file" "$file.bak" 2>/dev/null || true
+    chmod 600 "$tmp" 2>/dev/null || true
+    chown --reference="$file" "$tmp" 2>/dev/null || true
+    mv -f "$tmp" "$file"
+    return 0
+  fi
+  rm -f "$tmp"
+  return 1
+}
+
+if [ -f "$CONF_FILE" ]; then
+  if ! ( set -u; . "$CONF_FILE" ) >/dev/null 2>&1; then
+    if conf_sanitize "$CONF_FILE"; then
+      echo "[pelican-installer] $CONF_FILE contained unescaped values - re-quoted them (backup: $CONF_FILE.bak)." >&2
+    else
+      echo "[pelican-installer] ERROR: $CONF_FILE cannot be loaded even after re-quoting. Delete it and re-run." >&2
+      exit 1
+    fi
+  fi
+  set -a
+  if ! . "$CONF_FILE" 2>/dev/null; then
+    echo "[pelican-installer] ERROR: failed to load $CONF_FILE - delete it and re-run the installer." >&2
+    exit 1
+  fi
+  set +a
+fi
 
 if [ -n "${DOMAIN:-}" ]; then
   PANEL_FQDN="${PANEL_FQDN:-${PANEL_SUBDOMAIN:-panel}.$DOMAIN}"
@@ -439,6 +493,22 @@ valid_game_ports() {
     fi
   done
   return 0
+}
+
+detect_timezone() {
+  # Best-effort auto-detection; never asks the user. Override with TIMEZONE
+  # in installer.conf if the guess is wrong.
+  local tz=""
+  if command -v timedatectl >/dev/null 2>&1; then
+    tz=$(timedatectl show --property=Timezone --value 2>/dev/null || true)
+  fi
+  if [ -z "$tz" ] && [ -f /etc/timezone ]; then
+    tz=$(head -1 /etc/timezone 2>/dev/null || true)
+  fi
+  case "$tz" in
+    ''|Etc/UTC|Etc/Unknown|UTC|utc|Etc/GMT) echo UTC ;;
+    *) echo "$tz" ;;
+  esac
 }
 
 default_lan_cidr() {

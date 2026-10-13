@@ -145,7 +145,8 @@ EOF
     printf '\nMODPACK_MANAGER_STORE_METADATA=true\n' >> "$PANEL_DIR/.env"
   fi
   if [ -n "${CURSEFORGE_API_KEY:-}" ] && [ -f "$PANEL_DIR/.env" ] && ! grep -q '^MODPACK_MANAGER_CURSEFORGE_API_KEY' "$PANEL_DIR/.env"; then
-    printf '\nMODPACK_MANAGER_CURSEFORGE_API_KEY=%s\n' "$CURSEFORGE_API_KEY" >> "$PANEL_DIR/.env"
+    # Single-quoted .env value: CurseForge keys ($2a$10$...) must not expand.
+    printf "\nMODPACK_MANAGER_CURSEFORGE_API_KEY='%s'\n" "$CURSEFORGE_API_KEY" >> "$PANEL_DIR/.env"
     log "CurseForge API key added to panel .env."
   fi
 

@@ -44,10 +44,6 @@ collect_config() {
     echo "Pre-fill the config file (see installer.conf.example) and re-run with: --config /path/to/installer.conf" >&2
     exit 1
   fi
-  local default_tz="UTC"
-  if command -v timedatectl >/dev/null 2>&1; then
-    default_tz=$(timedatectl show --property=Timezone --value 2>/dev/null || echo "UTC")
-  fi
 
   tty_read DOMAIN "Domain (Cloudflare zone, e.g. example.com): " ""
   [ -n "${DOMAIN:-}" ] || die "A domain is required."
@@ -63,11 +59,8 @@ collect_config() {
   fi
   echo ""
 
-  tty_read TIMEZONE "Timezone [$default_tz]: " "$default_tz"
-  TIMEZONE=${TIMEZONE:-$default_tz}
-  case "$TIMEZONE" in
-    utc|UTC) TIMEZONE=UTC ;;
-  esac
+  TIMEZONE=${TIMEZONE:-$(detect_timezone)}
+  log "Timezone: $TIMEZONE (auto-detected - set TIMEZONE in $CONF_FILE to override)"
 
   tty_read PANEL_SUBDOMAIN "Panel subdomain [panel]: " "panel"
   PANEL_SUBDOMAIN=${PANEL_SUBDOMAIN:-panel}
@@ -95,20 +88,25 @@ collect_config() {
   tty_read AUTO_REBOOT "Auto-reboot at the end to verify self-healing? [yes]: " "yes"
   AUTO_REBOOT=${AUTO_REBOOT:-yes}
 
-  cat > "$CONF_FILE" <<EOF
-DOMAIN=$DOMAIN
-CF_API_TOKEN=$CF_API_TOKEN
-TIMEZONE=$TIMEZONE
-PANEL_SUBDOMAIN=$PANEL_SUBDOMAIN
-NODE_SUBDOMAIN=$NODE_SUBDOMAIN
-GAME_PORTS=$GAME_PORTS
-GAME_ROUTING=$GAME_ROUTING
-PLAYIT_SECRET_KEY=$PLAYIT_SECRET_KEY
-CURSEFORGE_API_KEY=$CURSEFORGE_API_KEY
-NODE_NAME=$NODE_NAME
-AUTO_REBOOT=$AUTO_REBOOT
-EOF
+  # %q-quote every value: tokens/passwords may contain $, backticks or quotes
+  # (a CurseForge key starts with $2a$10$...) and must stay literal on source.
+  {
+    printf 'DOMAIN=%q\n' "$DOMAIN"
+    printf 'CF_API_TOKEN=%q\n' "$CF_API_TOKEN"
+    printf 'TIMEZONE=%q\n' "$TIMEZONE"
+    printf 'PANEL_SUBDOMAIN=%q\n' "$PANEL_SUBDOMAIN"
+    printf 'NODE_SUBDOMAIN=%q\n' "$NODE_SUBDOMAIN"
+    printf 'GAME_PORTS=%q\n' "$GAME_PORTS"
+    printf 'GAME_ROUTING=%q\n' "$GAME_ROUTING"
+    printf 'PLAYIT_SECRET_KEY=%q\n' "${PLAYIT_SECRET_KEY:-}"
+    printf 'CURSEFORGE_API_KEY=%q\n' "${CURSEFORGE_API_KEY:-}"
+    printf 'NODE_NAME=%q\n' "$NODE_NAME"
+    printf 'AUTO_REBOOT=%q\n' "$AUTO_REBOOT"
+  } > "$CONF_FILE"
   chmod 600 "$CONF_FILE"
+  if ! ( set -u; . "$CONF_FILE" ) >/dev/null 2>&1; then
+    die "The configuration written to $CONF_FILE could not be loaded back. Delete the file and re-run the installer."
+  fi
   log "Configuration saved to $CONF_FILE"
 }
 
@@ -383,6 +381,13 @@ fi
 if [ "${CONF_FILE_ARG:-}" != "" ]; then
   cp -f "$CONF_FILE_ARG" "$CONF_FILE"
   chmod 600 "$CONF_FILE"
+  if ! ( set -u; . "$CONF_FILE" ) >/dev/null 2>&1; then
+    if conf_sanitize "$CONF_FILE"; then
+      log "Configuration from $CONF_FILE_ARG contained unescaped values - re-quoted (backup: $CONF_FILE.bak)."
+    else
+      die "Configuration file $CONF_FILE_ARG cannot be loaded. Fix the values and re-run."
+    fi
+  fi
 fi
 
 if [ ! -f "$CONF_FILE" ]; then
@@ -396,7 +401,10 @@ else
 fi
 
 set -a
-. "$CONF_FILE"
+if ! . "$CONF_FILE" 2>/dev/null; then
+  set +a
+  die "Failed to load $CONF_FILE - fix or delete the file and re-run."
+fi
 set +a
 
 validate_config
