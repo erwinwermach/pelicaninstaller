@@ -79,6 +79,7 @@ set_server_var() {
 
 fabric_install_inplace() {
   local srvdir=$1 mc=$2 ldr=$3 launch_jar=""
+  FABRIC_LAUNCH_JAR=""
   case "$mc" in
     latest|LATEST|"") mc=$(resolve_mc_latest) ;;
   esac
@@ -123,7 +124,11 @@ fabric_install_inplace() {
   chown -R pelican:pelican "$srvdir/$launch_jar" "$srvdir/libraries" "$srvdir/versions" "$srvdir/minecraft-server.jar" 2>/dev/null || true
   set_server_var "${srvdir##*/}" "$launch_jar"
   log "Server ${srvdir##*/}: installed $launch_jar (game jar + libraries)."
-  echo "$launch_jar"
+  # Result goes through a global, NOT stdout: this function logs (and runs
+  # run_with_heartbeat, whose log() tees to stdout), so a caller using
+  # `$(fabric_install_inplace ...)` would capture the log lines as the value.
+  FABRIC_LAUNCH_JAR="$launch_jar"
+  return 0
 }
 
 server_jars_fix() {
@@ -203,7 +208,8 @@ server_jars_fix() {
       ldr=$(server_var "$uuid" LOADER_VERSION)
       ldr=${ldr:-latest}
       local installed
-      installed=$(fabric_install_inplace "$srvdir" "$mc" "$ldr")
+      fabric_install_inplace "$srvdir" "$mc" "$ldr"
+      installed="$FABRIC_LAUNCH_JAR"
       if [ -n "$installed" ]; then
         jarfile=$installed
         expected="$srvdir/$jarfile"
