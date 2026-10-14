@@ -1,6 +1,10 @@
 # Pelican installer - pre-filled configuration
 # Save as /etc/pelican-installer/installer.conf (mode 600) on the server,
 # or pass with: sudo bash installer.sh --config /path/to/this/file
+# (one-liner: curl .../install.sh | sudo bash -s -- --config /path/to/this/file).
+# The installer also picks up ./installer.conf or /root/installer.conf on its
+# own; an existing /etc/pelican-installer/installer.conf is backed up to
+# installer.conf.bak-<timestamp> before it is replaced.
 #
 # If this file does not exist, the installer asks the same questions once.
 

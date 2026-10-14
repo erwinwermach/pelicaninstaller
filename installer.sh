@@ -322,6 +322,21 @@ if [ "${NO_SELF_UPDATE:-0}" != "1" ]; then
 fi
 
 # ------------------------------------------------------------------
+# config discovery: --config wins; otherwise auto-detect a config the user
+# dropped somewhere obvious so a re-run needs no arguments at all.
+# ------------------------------------------------------------------
+if [ -z "${CONF_FILE_ARG:-}" ] && [ ! -f "$CONF_FILE" ]; then
+  for cand in "$PWD/installer.conf" "$PWD/pelican-installer.conf" \
+              "/root/installer.conf" "/root/pelican-installer.conf"; do
+    if [ -f "$cand" ]; then
+      CONF_FILE_ARG=$cand
+      log "Found existing configuration: $cand (pass --config to use another file)."
+      break
+    fi
+  done
+fi
+
+# ------------------------------------------------------------------
 # optional full clean-slate reset (wipe + re-download installer from GitHub)
 # ------------------------------------------------------------------
 # Decided BEFORE the config is loaded: a confirmed wipe clears the config,
@@ -405,8 +420,24 @@ if [ "$SKIP_WIPE" = "0" ]; then
 fi
 
 if [ "${CONF_FILE_ARG:-}" != "" ]; then
-  cp -f "$CONF_FILE_ARG" "$CONF_FILE"
-  chmod 600 "$CONF_FILE"
+  if [ ! -f "$CONF_FILE_ARG" ]; then
+    die "Configuration file not found: $CONF_FILE_ARG"
+  fi
+  if [ "$CONF_FILE_ARG" != "$CONF_FILE" ]; then
+    # Never silently drop a previous config: back it up first, then load the
+    # new file on its own (sourcing + sanitize) before it is trusted.
+    if [ -f "$CONF_FILE" ]; then
+      cfg_backup="$CONF_FILE.bak-$(date +%Y%m%d-%H%M%S)"
+      if cp -f "$CONF_FILE" "$cfg_backup" 2>/dev/null; then
+        log "Backed up the previous configuration to $cfg_backup"
+      else
+        log_err "Could not back up $CONF_FILE - continuing anyway."
+      fi
+    fi
+    cp -f "$CONF_FILE_ARG" "$CONF_FILE"
+    chmod 600 "$CONF_FILE"
+    log "Using configuration from $CONF_FILE_ARG"
+  fi
   if ! ( set -u; . "$CONF_FILE" ) >/dev/null 2>&1; then
     if conf_sanitize "$CONF_FILE"; then
       log "Configuration from $CONF_FILE_ARG contained unescaped values - re-quoted (backup: $CONF_FILE.bak)."

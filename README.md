@@ -59,10 +59,11 @@ game-tunnel mapping, service recovery — running 24/7 via systemd.
 ## Install
 
 ### Requirements
-- Ubuntu Server 24.04 (24.04.x) — the installer refuses to run on anything else.
-- PHP 8.4+ for the panel (current Pelican releases): on 24.04 the installer
-  adds the **ondrej/php PPA** automatically; weekly updates upgrade PHP when a
-  new panel release raises the floor.
+- Ubuntu Server 24.04 or 26.04 — the installer refuses anything else.
+- PHP 8.4+ for the panel (current Pelican releases): the installer enables
+  `universe` (26.04 ships php8.4 there) and falls back to the ondrej/php PPA
+  only when it actually publishes for the release; weekly updates upgrade PHP
+  when a new panel release raises the floor.
 - A domain on **Cloudflare** (zone active).
 - A **Cloudflare API token** (https://dash.cloudflare.com/profile/api-tokens →
   Create Custom Token): Zone → Zone/DNS/SSL-and-Certificates (Read/Edit/Edit),
@@ -77,22 +78,37 @@ game-tunnel mapping, service recovery — running 24/7 via systemd.
 curl -fsSL https://raw.githubusercontent.com/erwinwermach/pelicaninstaller/main/install.sh | sudo bash
 ```
 
-You are asked once for: domain, Cloudflare token, timezone, subdomains,
-game-port range, an optional playit.gg key, node name, and whether to do a
-full clean-slate reset first. Game routing is no longer an install question —
-the panel always shows direct connection addresses for every game port, and
-tunnel backends (playit/bore/frp) are added later via `GAME_ROUTING` in the
-config. A confirmed reset removes everything this installer manages — panel/web/database/Docker/game-tunnel data **plus** its own
-config/stages/secrets — and re-downloads the installer fresh from GitHub, so
-no stale configuration (e.g. a corrupted token) can survive into the new
-setup. The OS, SSH, your user accounts and files are never touched.
+You are asked once for: domain, Cloudflare token, subdomains, game-port range,
+an optional playit.gg key, CurseForge key and node name (the timezone is
+auto-detected; every answer is saved and never asked again). Game routing is
+no longer an install question — the panel always shows direct connection
+addresses for every game port, and tunnel backends (playit/bore/frp) are added
+later via `GAME_ROUTING` in the config. A confirmed reset removes everything
+this installer manages — panel/web/database/Docker/game-tunnel data **plus**
+its own config/stages/secrets — and re-downloads the installer fresh from
+GitHub, so no stale configuration (e.g. a corrupted token) can survive into
+the new setup. The OS, SSH, your user accounts and files are never touched.
 Everything is saved to `/etc/pelican-installer/installer.conf` (root-only)
-and reused forever.
-For unattended runs, pre-fill that file (see `installer.conf.example`):
+and reused forever. Re-running the same line is also the resume/rescue path:
+an interrupted run picks up where it stopped.
+
+**Bringing your own config (unattended runs):** put it at
+`/etc/pelican-installer/installer.conf`, drop it as `./installer.conf`
+(the installer checks your current directory and `/root` on its own), or pass
+it explicitly:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/erwinwermach/pelicaninstaller/main/install.sh | sudo bash -s -- --config /path/to/installer.conf
 ```
+
+Before replacing an existing `/etc/pelican-installer/installer.conf` the old
+file is backed up to `installer.conf.bak-<timestamp>`, and the new file is
+loaded and validated on its own — values containing `$` (e.g. CurseForge
+`$2a$10$...` keys) are auto-escaped instead of breaking the run.
+
+Other flags (same on `sudo bash /opt/pelican-installer/installer.sh`):
+`--skip-wipe`, `--no-reboot`, `--no-self-update`, `--update`,
+`--reset-admin`, `--help`.
 
 If the installer finds an existing Pelican tunnel/DNS from an earlier install
 (e.g. you moved to new hardware), it checks whether that tunnel still has live
@@ -135,6 +151,12 @@ Set `PANEL_PLUGINS=all|minimal|none|comma,list` to control hub plugins
 (default `minimal`). Our own two plugins always install unless
 `INSTALL_SELF_PLUGINS=no`.
 
+Hub plugins are always imported at their **newest** release (the installer
+resolves the latest version from the hub and verifies the downloaded zip),
+and every installed plugin is checked for updates hourly by the watchdog and
+during the weekly update — our zips ship a `plugins-feed.json` update feed,
+hub plugins ship their own.
+
 ## Low-end hardware tuning (built in)
 
 Applied automatically as phase 9 (also retro-fitted onto existing installs):
@@ -152,11 +174,11 @@ sysctl/BBR, zram for low-memory hosts, NVMe/IO scheduler rules.
 
 ## Minecraft platform & modpack optimization
 
-- Import the full server-software matrix with `EXTRA_EGGS=minecraft` (Paper,
-  Purpur, Folia, Vanilla, Fabric, Forge, NeoForge, Quilt, Velocity, BungeeCord)
-  plus **Pumpkin**, the Rust server that runs vanilla-style worlds with a
-  fraction of the RAM and instant boot (pre-release: new worlds only, keep
-  backups).
+- The full server-software matrix is imported by default (Paper, Purpur,
+  Folia, Vanilla, Fabric, Forge, NeoForge, Quilt, Velocity, BungeeCord) plus
+  **Pumpkin**, the Rust server that runs vanilla-style worlds with a fraction
+  of the RAM and instant boot (pre-release: new worlds only, keep backups).
+  Trim it with `EXTRA_EGGS=games,bots` or `none` in the config.
 - **Optimizer mods** (admin-approved): server-side-only performance mods are
   matched to each modded server's loader + exact Minecraft version via the
   Modrinth API and dropped into `mods/` — ModernFix halves heavy modpack boot
@@ -173,6 +195,7 @@ sysctl/BBR, zram for low-memory hosts, NVMe/IO scheduler rules.
 |------|------|
 | Ubuntu security + full upgrades | daily / weekly (auto-reboot handled) |
 | Pelican Panel + Wings + cloudflared updates | weekly |
+| Panel plugin updates (hub + our plugins) | hourly (watchdog) + weekly |
 | Installer scripts self-update | every run + weekly |
 | Service recovery (mariadb/redis/php/nginx/docker/cloudflared/wings/queue) | every 5 min + on boot |
 | Tunnel/service/certificate repair | every 5 min (light) |
@@ -195,6 +218,9 @@ only opens real game ports when a usable public IP exists.
   (Livewire redirects while uninstalled) — this installer completes the setup
   via the panel CLI instead (admin account, APP_INSTALLED, queue worker, eggs,
   modern Java images).
+- The playit.gg agent runs as a native systemd service (`playit.service`), not
+  in Docker — tunnels come up by themselves after a reboot, no Docker
+  dependency in the boot path.
 - Logs: `/var/log/pelican/` (install.log, heal.log, update.log).
 - Troubleshooting: check `systemctl status <service>`, the heal log, and
   `/var/log/pelican/install.log`; rerunning the installer resumes where it
