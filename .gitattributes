@@ -7,5 +7,7 @@
 *.py text eol=lf
 *.php text eol=lf
 *.json text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
 VERSION text eol=lf
 installer.conf.example text eol=lf
