@@ -124,7 +124,7 @@ connectors:
 | Plugin | What it does |
 |---|---|
 | **Ops Board** | Admin: system health, crashlog timeline (paginated, mclo.gs upload), routing overview. Server: health + egg info + one-click jar repair, crashlogs, connection addresses + console widget |
-| **Performance** | Node-aware advisor: recommend-only optimization bundles (startup flags, memory sizing that fixes unbounded JVM heaps, `server.properties` + `user_jvm_args.txt` tuning, network settings for slow/high-latency links) + admin Node optimizer page |
+| **Performance** | Node-aware advisor: recommend-only optimization bundles (startup flags, memory sizing that fixes unbounded JVM heaps, `server.properties` / `pumpkin.toml` / `user_jvm_args.txt` tuning, network settings for slow/high-latency links), JVM boot accelerators (CDS auto, Java 25 AOT cache opt-in), a platform advisor (incl. Rust-based Pumpkin for vanilla workloads), a server-side optimizer-mod bundle (ModernFix, FerriteCore, Lithium/Canary, Krypton, ... matched to the exact loader + MC version via Modrinth) + admin Node optimizer page |
 | Modpack Manager | Install/update Minecraft modpacks (CurseForge, Modrinth, FTB, ATLauncher) |
 | Minecraft Modrinth | Install/update mods & plugins from Modrinth |
 | Mclogs Uploader | Share server logs to mclo.gs |
@@ -144,6 +144,26 @@ Applied automatically as phase 9 (also retro-fitted onto existing installs):
 - Panel caches prebuilt (`artisan optimize`, `filament:optimize`, `icons:cache`)
 - Self-heal split into light checks (5 min) and deep Cloudflare reconcile (30 min)
 - Watchdog file scans gated by change detection (no full-volume sweeps)
+
+Opt-in host tuning (off by default, see `installer.conf.example`): CPU governor,
+sysctl/BBR, zram for low-memory hosts, NVMe/IO scheduler rules.
+
+## Minecraft platform & modpack optimization
+
+- Import the full server-software matrix with `EXTRA_EGGS=minecraft` (Paper,
+  Purpur, Folia, Vanilla, Fabric, Forge, NeoForge, Quilt, Velocity, BungeeCord)
+  plus **Pumpkin**, the Rust server that runs vanilla-style worlds with a
+  fraction of the RAM and instant boot (pre-release: new worlds only, keep
+  backups).
+- **Optimizer mods** (admin-approved): server-side-only performance mods are
+  matched to each modded server's loader + exact Minecraft version via the
+  Modrinth API and dropped into `mods/` — ModernFix halves heavy modpack boot
+  times, FerriteCore cuts RAM, Lithium/Canary/Krypton cut CPU/network load.
+  Revert removes exactly the added files.
+- **Boot accelerators**: class-data-sharing is included automatically for
+  Java 19+ servers; Java 25+ servers can opt into an AOT class cache that is
+  trained on one restart and reused afterwards (auto-invalidated when mods or
+  the server jar change).
 
 ## Automatic updates & self-healing
 

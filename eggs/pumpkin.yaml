@@ -1,0 +1,123 @@
+_comment: 'Vendored by pelicaninstaller - adapted from the official Pumpkin egg (github.com/Pumpkin-MC/Pumpkin/blob/master/egg-pumpkin.json)'
+meta:
+  version: PLCN_v3
+  update_url: null
+exported_at: '2026-10-13T00:00:00+00:00'
+name: Pumpkin
+author: pelicaninstaller
+uuid: 87a413b7-4a45-401e-8b4f-6c10967f4424
+description: |-
+  Pumpkin is a Minecraft server written from scratch in Rust: no Java runtime,
+  millisecond startup and a fraction of the RAM a Java server needs. Java and
+  Bedrock clients share one world. PRE-RELEASE software: keep backups and never
+  point it at a world you cannot restore. Forge/Fabric/NeoForge mods and
+  Bukkit/Spigot/Paper plugins cannot run on it.
+tags:
+  - minecraft
+features:
+  - pid_limit
+docker_images:
+  'Debian': 'ghcr.io/pelican-eggs/yolks:debian'
+  'Alpine': 'ghcr.io/pelican-eggs/yolks:alpine'
+file_denylist: {  }
+startup_commands:
+  Default: './pumpkin'
+config:
+  files:
+    pumpkin.toml:
+      parser: file
+      find:
+        'address = "0.0.0.0:25565"': 'address = "0.0.0.0:{{server.allocations.default.port}}"'
+  startup:
+    done: 'Server is now running.'
+  logs: {  }
+  stop: stop
+scripts:
+  installation:
+    script: |-
+      #!/bin/ash
+      set -eu
+
+      apk add --no-cache curl >/dev/null 2>&1 || true
+      mkdir -p /mnt/server
+      cd /mnt/server
+
+      ARCH=$(uname -m)
+      case "$ARCH" in
+      	x86_64|amd64) PUMPKIN_ARCH="X64" ;;
+      	aarch64|arm64) PUMPKIN_ARCH="ARM64" ;;
+      	*) echo "Unsupported architecture: $ARCH"; exit 1 ;;
+      esac
+
+      BINARY_NAME="pumpkin-${PUMPKIN_ARCH}-Linux-musl"
+
+      if [ -n "${DOWNLOAD_URL:-}" ]; then
+      	URL="$DOWNLOAD_URL"
+      elif [ "${VERSION:-nightly}" = "latest" ] || [ "${VERSION:-nightly}" = "nightly" ]; then
+      	URL="https://github.com/${GITHUB_PACKAGE:-Pumpkin-MC/Pumpkin}/releases/download/nightly/${BINARY_NAME}"
+      else
+      	URL="https://github.com/${GITHUB_PACKAGE:-Pumpkin-MC/Pumpkin}/releases/download/${VERSION}/${BINARY_NAME}"
+      fi
+
+      echo "Downloading Pumpkin from: $URL"
+      curl -fsSL "$URL" -o /mnt/server/pumpkin
+      chmod +x /mnt/server/pumpkin
+
+      # First launch writes the default pumpkin.toml, then exits.
+      if [ ! -f pumpkin.toml ]; then
+      	timeout 2 ./pumpkin >/dev/null 2>&1 || true
+      fi
+    container: 'ghcr.io/pelican-eggs/installers:alpine'
+    entrypoint: ash
+variables:
+  -
+    name: 'Pumpkin Version'
+    description: |-
+      The version of Pumpkin to install: 'latest', 'nightly' or a release tag
+      (e.g. 'v0.2.0+26.3-26.51'). Scope: installation.
+    env_variable: VERSION
+    default_value: nightly
+    user_viewable: true
+    user_editable: true
+    rules:
+      - required
+      - string
+      - 'max:64'
+    sort: 1
+  -
+    name: 'GitHub Repository'
+    description: "GitHub repository in 'owner/repo' format to download releases from. Useful for forks. Scope: installation."
+    env_variable: GITHUB_PACKAGE
+    default_value: Pumpkin-MC/Pumpkin
+    user_viewable: true
+    user_editable: true
+    rules:
+      - required
+      - string
+      - 'max:128'
+    sort: 2
+  -
+    name: 'Direct Download URL'
+    description: 'Direct URL to download the Pumpkin binary from. Overrides VERSION and GITHUB_PACKAGE. Scope: installation.'
+    env_variable: DOWNLOAD_URL
+    default_value: ''
+    user_viewable: true
+    user_editable: true
+    rules:
+      - nullable
+      - string
+    sort: 3
+  -
+    name: 'Rust backtrace'
+    description: |-
+      "0" -> No backtrace is generated. This is the default behavior.
+      "1" -> Generates a minimal backtrace showing only relevant information about where the panic occurred.
+      "full" -> Generates a detailed backtrace, showing all frames leading to the panic.
+    env_variable: RUST_BACKTRACE
+    default_value: '1'
+    user_viewable: true
+    user_editable: true
+    rules:
+      - required
+      - 'in:0,1,full'
+    sort: 4

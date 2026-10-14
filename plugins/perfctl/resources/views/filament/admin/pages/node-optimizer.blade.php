@@ -44,7 +44,9 @@
                         <th class="py-1 pr-3 font-medium">Panel alloc</th>
                         <th class="py-1 pr-3 font-medium">Container limit</th>
                         <th class="py-1 pr-3 font-medium">In use</th>
-                        <th class="py-1 font-medium">Recommended</th>
+                        <th class="py-1 pr-3 font-medium">Recommended</th>
+                        <th class="py-1 pr-3 font-medium">Platform advice</th>
+                        <th class="py-1 font-medium">Boot cache</th>
                     </tr></thead>
                     <tbody>
                     @foreach($servers as $s)
@@ -66,6 +68,17 @@
                                     <span class="text-danger">(fix unbounded heap)</span>
                                 @endif
                             </td>
+                            <td class="py-1 pr-3 text-xs">
+                                @php($adv = $s['platform_advice'] ?? null)
+                                @if(($adv['verdict'] ?? '') === 'consider-pumpkin')
+                                    <x-filament::badge color="warning">consider Pumpkin</x-filament::badge>
+                                @elseif(($adv['verdict'] ?? '') === 'stay-modded')
+                                    <x-filament::badge color="gray">stay (modded)</x-filament::badge>
+                                @elseif(!empty($adv['verdict']))
+                                    <x-filament::badge color="success">stay</x-filament::badge>
+                                @endif
+                            </td>
+                            <td class="py-1 font-mono text-xs">{{ $s['boot_cache']['mode'] ?? 'off' }}</td>
                         </tr>
                     @endforeach
                     </tbody>

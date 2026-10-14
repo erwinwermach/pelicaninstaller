@@ -114,9 +114,28 @@ INSTALL_SELF_PLUGINS=yes
 #              Satisfactory, Terraria, Factorio, FiveM (default)
 #   bots     = Discord bots (Red, Ree6)
 #   runtimes = generic Python, NodeJS, Rust
+#   minecraft= full MC platform matrix (Paper, Purpur, Folia, Vanilla, Fabric,
+#              Forge, NeoForge, Quilt, Velocity, BungeeCord, Pumpkin)
 #   all      = everything above
 #   none     = skip egg imports
 EXTRA_EGGS=games,bots
+
+# Server-side optimizer mods (Performance plugin): matches ModernFix, FerriteCore,
+# Lithium/Canary, Krypton, C2ME, ... to each modded server's exact loader and
+# Minecraft version (via Modrinth). Nothing is downloaded until an admin clicks
+# Apply on the server's Performance page; revert removes exactly the added files.
+OPTIMIZER_MODS=yes
+
+# Opt-in game-host tuning (applied during the 'tune' phase; delete the
+# /etc/pelican-installer/stages/tune marker and re-run installer.sh to re-apply):
+#   TUNE_CPU_GOVERNOR: off | auto (only when the governor is powersave) | performance
+#   TUNE_SYSCTL:       no | yes (max_map_count, dirty ratios, tcp_fastopen, BBR when available)
+#   TUNE_ZRAM:         off | auto (hosts below 8GB only) | yes (always)
+#   TUNE_IO_SCHEDULER: off | auto (nvme=none, others=mq-deadline)
+TUNE_CPU_GOVERNOR=off
+TUNE_SYSCTL=no
+TUNE_ZRAM=off
+TUNE_IO_SCHEDULER=off
 
 # Route HTTP apps through the Cloudflare tunnel on app-<port>.<domain>.
 # Only Cloudflare HTTP ports work publicly (80/443/8080/8443/2052-2087/2095-2096).

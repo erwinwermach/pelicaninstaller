@@ -21,12 +21,15 @@ class Performance extends Page
     public static array $profiles = [
         'mc-paper' => 'PaperMC / Purpur / Pufferfish - G1 tuned for low pause times',
         'mc-fabric' => 'Fabric modded - G1 with larger regions for big heaps',
-        'mc-forge' => 'Forge / NeoForge modded - G1 for heavy mod workloads',
+        'mc-forge' => 'Forge modded - G1 for heavy mod workloads',
+        'mc-neoforge' => 'NeoForge modded - G1 for heavy mod workloads',
+        'mc-pumpkin' => 'Pumpkin (Rust) - no JVM; small footprint, pumpkin.toml tuning',
         'mc-generic' => 'Vanilla & other Java Minecraft - balanced Aikar-style set',
         'proxy-java' => 'Velocity / Waterfall / BungeeCord - small steady heap',
         'source-engine' => 'Source engine (CS, GMod, TF2) - stable srcds arguments',
         'python' => 'Python bots and apps - unbuffered output, no bytecode files',
         'nodejs' => 'Node.js apps - heap capped to the allocation size',
+        'generic' => 'Unrecognized workload - no specific tuning',
     ];
 
     public function getData(): array
@@ -121,6 +124,58 @@ class Performance extends Page
         Notification::make()
             ->title('Revert scheduled')
             ->body('The original startup command, memory allocation and config files will be restored within 5 minutes. Restart this server afterwards.')
+            ->success()
+            ->send();
+    }
+
+    public function applyMods(): void
+    {
+        $d = $this->getData();
+        if (empty($d['rec']['file_recs']['optimizer_mods']['eligible'])) {
+            Notification::make()
+                ->title('No optimizer mods available')
+                ->body('No server-side optimization mods could be matched to this server yet.')
+                ->warning()
+                ->send();
+
+            return;
+        }
+
+        $this->request(['op' => 'mods_apply']);
+        Notification::make()
+            ->title('Optimizer mods scheduled')
+            ->body('Server-side performance mods (ModernFix, FerriteCore, ...) will be downloaded into the mods folder within 5 minutes. Restart afterwards. Revert removes exactly the added files.')
+            ->success()
+            ->send();
+    }
+
+    public function revertMods(): void
+    {
+        $this->request(['op' => 'mods_revert']);
+        Notification::make()
+            ->title('Mod revert scheduled')
+            ->body('The optimizer mods added by this plugin will be removed within 5 minutes. Restart this server afterwards.')
+            ->success()
+            ->send();
+    }
+
+    public function setBootCache(string $mode): void
+    {
+        if (! in_array($mode, ['cds', 'aot', 'off'], true)) {
+            return;
+        }
+
+        $this->request(['op' => 'boot_cache', 'mode' => $mode]);
+
+        $label = match ($mode) {
+            'cds' => 'Class-data-sharing archive',
+            'aot' => 'Java 25 AOT class cache',
+            default => 'Boot accelerator',
+        };
+
+        Notification::make()
+            ->title($label . ($mode === 'off' ? ' disabled' : ' scheduled'))
+            ->body('The boot-cache change is applied within 5 minutes; applied tuning updates its startup command automatically. Restart the server afterwards.')
             ->success()
             ->send();
     }

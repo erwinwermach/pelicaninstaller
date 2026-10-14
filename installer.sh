@@ -124,6 +124,11 @@ validate_config() {
   AUTO_REBOOT=${AUTO_REBOOT:-yes}
   WIPE_FIRST=${WIPE_FIRST:-}
   AUTO_ADMIN=${AUTO_ADMIN:-yes}
+  OPTIMIZER_MODS=${OPTIMIZER_MODS:-yes}
+  TUNE_CPU_GOVERNOR=${TUNE_CPU_GOVERNOR:-off}
+  TUNE_SYSCTL=${TUNE_SYSCTL:-no}
+  TUNE_ZRAM=${TUNE_ZRAM:-off}
+  TUNE_IO_SCHEDULER=${TUNE_IO_SCHEDULER:-off}
 
   [ -n "$DOMAIN" ] || die "DOMAIN is not set in $CONF_FILE"
   [ -n "$CF_API_TOKEN" ] || die "CF_API_TOKEN is not set in $CONF_FILE"
@@ -134,6 +139,26 @@ validate_config() {
   case "$GAME_ROUTING" in
     playit|bore|frp-vps|direct|none) ;;
     *) die "Invalid GAME_ROUTING '$GAME_ROUTING' in $CONF_FILE." ;;
+  esac
+  case "$OPTIMIZER_MODS" in
+    yes|no) ;;
+    *) die "Invalid OPTIMIZER_MODS '$OPTIMIZER_MODS' in $CONF_FILE (yes|no)." ;;
+  esac
+  case "$TUNE_CPU_GOVERNOR" in
+    auto|performance|off) ;;
+    *) die "Invalid TUNE_CPU_GOVERNOR '$TUNE_CPU_GOVERNOR' in $CONF_FILE (auto|performance|off)." ;;
+  esac
+  case "$TUNE_SYSCTL" in
+    yes|no) ;;
+    *) die "Invalid TUNE_SYSCTL '$TUNE_SYSCTL' in $CONF_FILE (yes|no)." ;;
+  esac
+  case "$TUNE_ZRAM" in
+    auto|yes|no|off) ;;
+    *) die "Invalid TUNE_ZRAM '$TUNE_ZRAM' in $CONF_FILE (auto|yes|no|off)." ;;
+  esac
+  case "$TUNE_IO_SCHEDULER" in
+    auto|off) ;;
+    *) die "Invalid TUNE_IO_SCHEDULER '$TUNE_IO_SCHEDULER' in $CONF_FILE (auto|off)." ;;
   esac
 }
 
@@ -150,6 +175,7 @@ install_heal_system() {
   cp -rf "$SCRIPT_DIR/bin" "$inst_dir/"
   cp -rf "$SCRIPT_DIR/systemd" "$inst_dir/"
   cp -rf "$SCRIPT_DIR/patches" "$inst_dir/"
+  cp -rf "$SCRIPT_DIR/eggs" "$inst_dir/"
   cp -f "$SCRIPT_DIR/installer.sh" "$inst_dir/"
   cp -f "$SCRIPT_DIR/install.sh" "$inst_dir/"
   cp -f "$SCRIPT_DIR/VERSION" "$inst_dir/" 2>/dev/null || true
@@ -440,6 +466,8 @@ NODE_FQDN="$NODE_SUBDOMAIN.$DOMAIN"
 . "$SCRIPT_DIR/lib/routing.sh"
 # shellcheck source=../lib/perfctl.sh
 . "$SCRIPT_DIR/lib/perfctl.sh"
+# shellcheck source=../lib/modopt.sh
+. "$SCRIPT_DIR/lib/modopt.sh"
 
 STAGES_DIR="$PI_ROOT/stages"
 mkdir -p "$STAGES_DIR"
