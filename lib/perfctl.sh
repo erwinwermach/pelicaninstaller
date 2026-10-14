@@ -830,7 +830,7 @@ perf_scan() {
   infra_reserve=$(printf '%s' "$budget_json" | jq -r '.reserve_mb')
   budget=$(printf '%s' "$budget_json" | jq -r '.budget_mb')
 
-  local sum_allocated=0 sum_recommended=0 server_count=0
+  local sum_allocated=0 sum_recommended=0 server_count=0 no_mem_list=""
   # read-loop vars must be local: a non-local `name` would clobber run_phase's
   # dynamically-scoped local and the stage marker would be written as "".
   local uuid name startup memory egg_name images image
@@ -839,6 +839,11 @@ perf_scan() {
     [ -n "$uuid" ] || continue
     memory=${memory:-0}
     case "$memory" in ''|*[!0-9]*) memory=0 ;; esac
+    if [ "$memory" -eq 0 ]; then
+      # A 0 MB limit cannot start: wings sets --memory-swap from it and docker
+      # refuses ("set the Memory limit when using Memoryswap limit").
+      no_mem_list="${no_mem_list}${no_mem_list:+, }$name"
+    fi
     local profile rec reason ooms mem_json heap recmem unb mnote
     local eff rss restarts keepup props jvms yamlc pumpkin slow
     local boot_json boot_mode boot_flags upd mods advice
@@ -938,6 +943,10 @@ perf_scan() {
     echo '{}' > "$PERF_APPLIED_FILE"
     chmod 600 "$PERF_APPLIED_FILE"
     perf_mirror_applied
+  fi
+
+  if [ -n "$no_mem_list" ]; then
+    log_err "Server(s) without a memory limit cannot start: $no_mem_list - wings/docker refuse a memory-swap limit without memory. Set a memory limit in the panel (4-6 GB is typical for modpacks)."
   fi
   return 0
 }

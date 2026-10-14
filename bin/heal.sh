@@ -118,16 +118,30 @@ else
 fi
 
 if ! curl -k -fsS -m 10 -o /dev/null https://127.0.0.1:8443/ 2>/dev/null; then
-  hlog "panel unreachable or erroring - restarting nginx and php-fpm"
-  restart_service "$PHP_FPM"
-  restart_service nginx
   sleep 3
-  curl -k -fsS -m 10 -o /dev/null https://127.0.0.1:8443/ 2>/dev/null || hlog "panel still unreachable"
+  if ! curl -k -fsS -m 15 -o /dev/null https://127.0.0.1:8443/ 2>/dev/null; then
+    hlog "panel unreachable or erroring - restarting nginx and php-fpm"
+    restart_service "$PHP_FPM"
+    restart_service nginx
+    sleep 3
+    curl -k -fsS -m 10 -o /dev/null https://127.0.0.1:8443/ 2>/dev/null || hlog "panel still unreachable"
+  fi
 fi
 
 if [ -f "$PELICAN_ETC/config.yml" ]; then
-  if ! curl -fsS -m 10 -o /dev/null http://127.0.0.1:8080/api/system 2>/dev/null; then
-    hlog "wings API unreachable or erroring - restarting wings"
+  # Retry before restarting: wings can be busy with a long docker operation
+  # (container create/start of a modpack) and a single slow probe used to
+  # restart it mid-boot, killing the server start.
+  wings_ok=0
+  for _i in 1 2 3; do
+    if curl -fsS -m 10 -o /dev/null http://127.0.0.1:8080/api/system 2>/dev/null; then
+      wings_ok=1
+      break
+    fi
+    sleep 5
+  done
+  if [ "$wings_ok" != "1" ]; then
+    hlog "wings API unreachable or erroring (3 probes) - restarting wings"
     restart_service wings
   fi
 fi

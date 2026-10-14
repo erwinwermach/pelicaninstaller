@@ -91,6 +91,7 @@ fabric_install_inplace() {
   fabric_installer_ensure || { log_err "Server $1: could not fetch fabric installer."; return 1; }
   if ! run_with_heartbeat "fabric installer (image pull may take a while)" 1200 \
        docker run --rm \
+       --user "$(stat -c %u:%g "$srvdir" 2>/dev/null || echo 0:0)" \
        -v "$srvdir:/data:rw" \
        -v "$FABRIC_INSTALLER_JAR:/fabric-installer.jar:ro" \
        -w /data ghcr.io/pelican-eggs/yolks:java_25 \
@@ -145,6 +146,25 @@ server_jars_fix() {
     esac
     srvdir="/var/lib/pelican/volumes/$uuid"
     [ -d "$srvdir" ] || continue
+
+    # Modpack-manager installs (CurseForge/Modrinth packs) ship their own
+    # launcher (start.sh) and the panel starts them through the startup
+    # command, not SERVER_JARFILE - fabric-installing jars here would fight
+    # the modpack and always fail.
+    if [ -f "$srvdir/.modpack-manager.json" ]; then
+      local mp_jarfile="start.sh"
+      if [ ! -f "$srvdir/$mp_jarfile" ]; then
+        mp_jarfile=$(server_var "$uuid" SERVER_JARFILE)
+        mp_jarfile=${mp_jarfile##*/}
+        mp_jarfile=${mp_jarfile:-start.sh}
+      fi
+      size=0
+      if [ -f "$srvdir/$mp_jarfile" ]; then
+        size=$(stat -c %s "$srvdir/$mp_jarfile" 2>/dev/null || echo 0)
+      fi
+      server_jars_report_add "$uuid" "$srvname" "true" "$mp_jarfile" "$size" "false"
+      continue
+    fi
 
     jarfile=$(server_var "$uuid" SERVER_JARFILE)
     jarfile=${jarfile##*/}

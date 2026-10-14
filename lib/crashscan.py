@@ -64,6 +64,8 @@ EXIT_HINTS = {
 
 ISSUE_PATTERNS = [
     (re.compile(r"Missing game jar at|couldn't locate the game|could not locate the game"), "Game jar missing or corrupt - the launcher cannot find it; use the Health page repair."),
+    (re.compile(r"You should always set the Memory limit"), "Server has no memory limit - wings cannot create the container. Set a memory limit in the panel (4-6 GB is typical for modpacks)."),
+    (re.compile(r"failed to (create container|run pre-boot process)"), "Container creation failed - see the wings error in the excerpt."),
     (re.compile(r"AccessDeniedException"), "File permission problem - files were extracted without read permissions (common with modpack installs); the watchdog fixes these automatically."),
     (re.compile(r"Mod resolution failed|Incompatible mods found|HARD_DEP"), "Mod incompatibility - conflicting or missing mod dependencies (see the resolution details)."),
     (re.compile(r"requires version \d+ or later of 'OpenJDK[^']*' \(java\)"), "A mod requires a newer Java version than the server runs - update the egg's Java/docker image."),
@@ -342,6 +344,15 @@ def scan_wings_crashes(state, servers, now_ts):
         if any(e.get("source") == "container" and abs(e.get("ts", 0) - ts) < 600 for e in idx.get("events", [])):
             continue
         logs = run(["docker", "logs", "--tail", "60", uuid])
+        if not (logs or "").strip():
+            # The container may never have been created (e.g. docker refused
+            # the create: "set the Memory limit when using Memoryswap limit").
+            # The wings journal holds the actual error - use it as the excerpt.
+            logs = run(["journalctl", "-u", "wings",
+                        "--since", "@%d" % (ts - 10), "--until", "@%d" % (ts + 10),
+                        "-o", "cat", "--no-pager"])
+            lines = [ln for ln in (logs or "").splitlines() if ln.strip()][-60:]
+            logs = "\n".join(lines)
         issue = first_issue(logs) or "Crashed - detected by the daemon crash handler."
         ev = make_event("server", "wings-crash", "critical", ts, issue, logs, server=uuid, name=servers[uuid])
         loop_check(ev, ts)

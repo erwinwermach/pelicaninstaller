@@ -105,17 +105,30 @@ banner() {
 }
 
 log() {
-  local ts
+  local ts line
   ts=$(date '+%Y-%m-%d %H:%M:%S')
   mkdir -p "$LOG_DIR" 2>/dev/null || true
-  echo "[$ts] $*" | tee -a "$INSTALL_LOG" 2>/dev/null || true
+  line="[$ts] $*"
+  # PI_LOG_NO_TEE is set for children of run_with_heartbeat, whose stdout is
+  # already redirected into $INSTALL_LOG - teeing there would write every line
+  # twice.
+  if [ "${PI_LOG_NO_TEE:-0}" = "1" ]; then
+    printf '%s\n' "$line" >> "$INSTALL_LOG" 2>/dev/null || true
+  else
+    printf '%s\n' "$line" | tee -a "$INSTALL_LOG" 2>/dev/null || true
+  fi
 }
 
 log_err() {
-  local ts
+  local ts line
   ts=$(date '+%Y-%m-%d %H:%M:%S')
   mkdir -p "$LOG_DIR" 2>/dev/null || true
-  echo "[$ts] ERROR: $*" | tee -a "$INSTALL_LOG" 2>/dev/null >&2 || true
+  line="[$ts] ERROR: $*"
+  if [ "${PI_LOG_NO_TEE:-0}" = "1" ]; then
+    printf '%s\n' "$line" >> "$INSTALL_LOG" 2>/dev/null || true
+  else
+    printf '%s\n' "$line" | tee -a "$INSTALL_LOG" 2>/dev/null >&2 || true
+  fi
 }
 
 die() {
@@ -262,7 +275,7 @@ run_with_heartbeat() {
   # after $timeout_s seconds. Turns invisible apt/composer hangs into progress.
   local label=$1 timeout_s=$2
   shift 2
-  "$@" >>"$INSTALL_LOG" 2>&1 &
+  PI_LOG_NO_TEE=1 "$@" >>"$INSTALL_LOG" 2>&1 &
   local pid=$! waited=0 ticks=0 next_report=60 last_line rc=0
   local interval="${RUN_HEARTBEAT_INTERVAL:-15}"
   [ "$interval" -ge 1 ] 2>/dev/null || interval=15
