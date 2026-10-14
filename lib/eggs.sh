@@ -107,6 +107,7 @@ eggs_phase() {
   done
 
   local count_imported=0
+  local name url
   while IFS='|' read -r name url; do
     [ -n "$name" ] || continue
     log "Importing egg '$name' from $url"

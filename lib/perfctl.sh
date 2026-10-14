@@ -831,6 +831,9 @@ perf_scan() {
   budget=$(printf '%s' "$budget_json" | jq -r '.budget_mb')
 
   local sum_allocated=0 sum_recommended=0 server_count=0
+  # read-loop vars must be local: a non-local `name` would clobber run_phase's
+  # dynamically-scoped local and the stage marker would be written as "".
+  local uuid name startup memory egg_name images image
 
   while IFS=$'\t' read -r uuid name startup memory egg_name images image; do
     [ -n "$uuid" ] || continue

@@ -258,17 +258,22 @@ finish_install() {
 run_phase() {
   local name=$1
   shift
-  if [ -f "$STAGES_DIR/$name" ]; then
+  # Compute the marker path BEFORE the phase runs. Bash locals are dynamically
+  # scoped: if a phase (or anything it calls) assigns a non-local `name`, it
+  # silently overwrites our copy - eggs_phase/perfctl_phase did exactly that,
+  # so the marker was written with an empty name and the phase re-ran forever.
+  local __phase_marker="$STAGES_DIR/$name"
+  if [ -f "$__phase_marker" ]; then
     log "Phase '$name' already completed - skipping."
     return 0
   fi
   if [ "$SKIP_WIPE" = "1" ] && [ "$name" = "wipe" ]; then
     log "Skipping wipe phase (--skip-wipe)."
-    touch "$STAGES_DIR/$name"
+    touch "$__phase_marker"
     return 0
   fi
   if "$@"; then
-    touch "$STAGES_DIR/$name"
+    touch "$__phase_marker"
   else
     die "Phase '$name' failed. Fix the issue and re-run - it will resume."
   fi
