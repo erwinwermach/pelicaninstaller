@@ -119,8 +119,10 @@ if [ -f "$PANEL_DIR/artisan" ] && [ -f "$PANEL_DIR/.env" ] && grep -q '^APP_INST
   ensure_app_api_key >/dev/null 2>&1 && eggs_phase >/dev/null 2>&1 || true
   # shellcheck source=../lib/plugins.sh
   . "$UPD_DIR/lib/plugins.sh"
-  plugins_patch_modpack 2>/dev/null || true
   plugins_update_all 2>/dev/null || true
+  plugins_patch_modpack 2>/dev/null || true
+  plugins_sync_curseforge_key 2>/dev/null || true
+  plugins_verify_curseforge_key 2>/dev/null || true
 else
   log "Panel not installed yet - skipping panel update."
 fi

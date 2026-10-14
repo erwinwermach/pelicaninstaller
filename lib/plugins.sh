@@ -276,11 +276,8 @@ EOF
   if [ -f "$PANEL_DIR/.env" ] && ! grep -q '^MODPACK_MANAGER_STORE_METADATA' "$PANEL_DIR/.env"; then
     printf '\nMODPACK_MANAGER_STORE_METADATA=true\n' >> "$PANEL_DIR/.env"
   fi
-  if [ -n "${CURSEFORGE_API_KEY:-}" ] && [ -f "$PANEL_DIR/.env" ] && ! grep -q '^MODPACK_MANAGER_CURSEFORGE_API_KEY' "$PANEL_DIR/.env"; then
-    # Single-quoted .env value: CurseForge keys ($2a$10$...) must not expand.
-    printf "\nMODPACK_MANAGER_CURSEFORGE_API_KEY='%s'\n" "$CURSEFORGE_API_KEY" >> "$PANEL_DIR/.env"
-    log "CurseForge API key added to panel .env."
-  fi
+  plugins_sync_curseforge_key
+  plugins_verify_curseforge_key
 
   log "Tagging Java eggs as 'minecraft' (required for the Modpacks page)..."
   mysql <<SQL 2>>"$INSTALL_LOG" || true
@@ -296,4 +293,88 @@ SQL
   . "$SCRIPT_DIR/lib/tune.sh"
   panel_optimize || true
   log "Plugins installed and configured."
+}
+
+modpack_env_get() {
+  # Current value of a key in the panel .env (quotes stripped).
+  local key=$1
+  sed -n "s/^${key}=//p" "$PANEL_DIR/.env" 2>/dev/null | tail -1 | sed -e "s/^['\"]//" -e "s/['\"]\$//"
+}
+
+modpack_env_set() {
+  # Replace (or append) KEY='value' in the panel .env without expanding the
+  # value - CurseForge keys start with $2a$10$. Single quotes are escaped.
+  local key=$1 value=$2 tmp
+  [ -f "$PANEL_DIR/.env" ] || return 1
+  value=${value//\'/\\\'}
+  tmp=$(mktemp) || return 1
+  if ! MODPACK_KEY="$key" MODPACK_VAL="$value" awk '
+        BEGIN { key = ENVIRON["MODPACK_KEY"]; val = ENVIRON["MODPACK_VAL"]; q = sprintf("%c", 39) }
+        index($0, key "=") == 1 { print key "=" q val q; found = 1; next }
+        { print }
+        END { if (!found) print key "=" q val q }
+      ' "$PANEL_DIR/.env" > "$tmp"; then
+    rm -f "$tmp"
+    return 1
+  fi
+  chmod --reference="$PANEL_DIR/.env" "$tmp" 2>/dev/null || true
+  chown --reference="$PANEL_DIR/.env" "$tmp" 2>/dev/null || true
+  mv -f "$tmp" "$PANEL_DIR/.env"
+}
+
+plugins_sync_curseforge_key() {
+  # Keep MODPACK_MANAGER_CURSEFORGE_API_KEY in sync with the installer config.
+  # The old append-only logic skipped the write whenever *any* line with that
+  # key existed - including a stale or empty value (e.g. one saved from the
+  # plugin settings UI before the key was configured), which the panel then
+  # reports as an invalid/missing key forever.
+  [ -n "${CURSEFORGE_API_KEY:-}" ] || return 0
+  [ -f "$PANEL_DIR/.env" ] || return 0
+  local current
+  current=$(modpack_env_get MODPACK_MANAGER_CURSEFORGE_API_KEY)
+  if [ "$current" = "$CURSEFORGE_API_KEY" ]; then
+    return 0
+  fi
+  if ! modpack_env_set MODPACK_MANAGER_CURSEFORGE_API_KEY "$CURSEFORGE_API_KEY"; then
+    log_err "Could not update the CurseForge API key in the panel .env."
+    return 1
+  fi
+  if [ -n "$current" ]; then
+    log "Updated the CurseForge API key in the panel .env (the stored value differed)."
+  else
+    log "CurseForge API key added to panel .env."
+  fi
+  # The value must be visible immediately, not only after the next cache build;
+  # the queue worker loads config at boot, so it has to recycle too or queued
+  # modpack installs keep seeing the old (missing) key.
+  (cd "$PANEL_DIR" && COMPOSER_ALLOW_SUPERUSER=1 php artisan config:clear) >>"$INSTALL_LOG" 2>&1 || true
+  (cd "$PANEL_DIR" && COMPOSER_ALLOW_SUPERUSER=1 php artisan queue:restart) >>"$INSTALL_LOG" 2>&1 || true
+  return 0
+}
+
+plugins_verify_curseforge_key() {
+  # Definitive check against the CurseForge API (no more guessing whether the
+  # panel "sees" the key). The key never appears in the process list.
+  [ -n "${CURSEFORGE_API_KEY:-}" ] || return 0
+  command -v curl >/dev/null 2>&1 || return 0
+  local hdr code base
+  base="${CURSEFORGE_API_BASE:-https://api.curseforge.com}"
+  hdr=$(mktemp) || return 0
+  chmod 600 "$hdr" 2>/dev/null || true
+  printf 'header = "x-api-key: %s"\n' "$CURSEFORGE_API_KEY" > "$hdr"
+  code=$(curl -sS -o /dev/null -w '%{http_code}' -m 20 -K "$hdr" \
+    "$base/v1/games?index=0&pageSize=1" 2>/dev/null || true)
+  rm -f "$hdr"
+  case "$code" in
+    200)
+      log "CurseForge API key verified (api.curseforge.com accepted it)."
+      ;;
+    401|403)
+      log_err "CurseForge rejected the API key (HTTP $code) - create a new key at https://console.curseforge.com and update CURSEFORGE_API_KEY in $CONF_FILE."
+      ;;
+    *)
+      log_err "Could not verify the CurseForge API key (HTTP ${code:-none}) - continuing."
+      ;;
+  esac
+  return 0
 }

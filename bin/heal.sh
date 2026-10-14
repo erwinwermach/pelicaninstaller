@@ -159,7 +159,11 @@ foreach (\App\Models\Role::getPermissionList() as \$model => \$prefixes) {
     plugins_ensure_installed >>"$INSTALL_LOG" 2>&1 || true
     plugins_reconcile >>"$INSTALL_LOG" 2>&1 || true
     plugins_update_all >>"$INSTALL_LOG" 2>&1 || true
+    plugins_sync_curseforge_key >>"$INSTALL_LOG" 2>&1 || true
     plugins_patch_modpack >>"$INSTALL_LOG" 2>&1 || true
+    # Recycle the queue worker so .env/config changes made through the panel UI
+    # (plugin settings pages write env values themselves) reach queued jobs.
+    (cd "$PANEL_DIR" && php artisan queue:restart) >>"$INSTALL_LOG" 2>&1 || true
     # shellcheck source=../lib/eggs.sh
     . "$HEAL_DIR/lib/eggs.sh"
     ensure_app_api_key >/dev/null 2>&1 && eggs_phase >/dev/null 2>&1 || true
