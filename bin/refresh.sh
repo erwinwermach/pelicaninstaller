@@ -76,6 +76,8 @@ run_step() {
 
 if want system; then
   log "refresh: full update via update.sh (apt, panel, wings) - this can take a while"
+  # update.sh checks the same lock; release our fd first or it would skip.
+  exec 8>&-
   exec bash "$SCRIPT_DIR/bin/update.sh"
 fi
 

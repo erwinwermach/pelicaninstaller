@@ -326,8 +326,11 @@ if [ "${NO_SELF_UPDATE:-0}" != "1" ]; then
 fi
 
 # --refresh dispatches to bin/refresh.sh with the component names in "$@"
-# (scripts services routing plugins key eggs panel system | all).
+# (scripts services routing plugins key eggs panel system | all). Release the
+# installer lock first: this process holds it on fd 8 and refresh.sh checks it
+# via a separate flock, which would report "installer is running".
 if [ "${FORCE_REFRESH:-0}" = "1" ]; then
+  exec 8>&-
   exec bash "$SCRIPT_DIR/bin/refresh.sh" "$@"
 fi
 
