@@ -1,5 +1,6 @@
 PERF_REC_FILE="$PANEL_STORAGE/perf-recommendations.json"
 PERF_APPLIED_FILE="$PI_ROOT/perf-applied.json"
+PERF_BOOT_FILE="$PI_ROOT/boot-cache.json"
 PERF_REQUEST_DIR="$PANEL_STORAGE/requests"
 PERF_VOLUMES="${PERF_VOLUMES:-/var/lib/pelican/volumes}"
 PERF_BACKUP_DIR="${PERF_BACKUP_DIR:-$PANEL_STORAGE/perf-backups}"
@@ -10,7 +11,9 @@ perf_profiles_list() {
   cat <<'EOF'
 mc-paper|PaperMC/Purpin-style servers: G1 tuning sized to the allocation
 mc-fabric|Fabric modded: G1 tuning with larger region size for big heaps
-mc-forge|Forge/NeoForge modded: G1 tuning with larger region size
+mc-forge|Forge modded: G1 tuning with larger region size
+mc-neoforge|NeoForge modded: G1 tuning with larger region size
+mc-pumpkin|Pumpkin (Rust server): no JVM flags; pumpkin.toml tuning and a small memory footprint
 mc-generic|Vanilla/other Java Minecraft: balanced Aikar-style set
 proxy-java|Velocity/Waterfall/BungeeCord proxies: small steady heap
 source-engine|Source engine (CS/GMod/TF2): srcds startup args
@@ -25,10 +28,12 @@ perf_detect_profile() {
   hay=$(printf '%s\n%s\n%s' "$egg_name" "$images" "$startup" | tr '[:upper:]' '[:lower:]')
 
   case "$hay" in
+    *pumpkin*) echo mc-pumpkin; return ;;
     *paper*|*purpur*|*pufferfish*|*leaves*) echo mc-paper; return ;;
     *velocity*|*waterfall*|*bungee*) echo proxy-java; return ;;
+    *neoforge*) echo mc-neoforge; return ;;
     *fabric*) echo mc-fabric; return ;;
-    *forge*|*neoforge*) echo mc-forge; return ;;
+    *forge*) echo mc-forge; return ;;
   esac
 
   case "$hay" in
@@ -118,18 +123,199 @@ perf_java_flags() {
   local heap=$1
   local region="8M"
   [ "$heap" -ge 12288 ] && region="16M"
-  printf -- '-XX:+UseG1GC -XX:+ParallelRefProcEnabled -XX:MaxGCPauseMillis=200 -XX:+UnlockExperimentalVMOptions -XX:+DisableExplicitGC -XX:+AlwaysPreTouch -XX:G1NewSizePercent=30 -XX:G1MaxNewSizePercent=40 -XX:G1HeapRegionSize=%s -XX:G1ReservePercent=20 -XX:G1HeapWastePercent=5 -XX:G1MixedGCCountTarget=4 -XX:InitiatingHeapOccupancyPercent=15 -XX:G1MixedGCLiveThresholdPercent=90 -XX:G1RSetUpdatingPauseTimePercent=5 -XX:SurvivorRatio=32 -XX:+PerfDisableSharedMem -XX:MaxTenuringThreshold=1 -Dusing.aikars.flags=https://mcflags.emc.gs -Daikars.new.flags=true' "$region"
+    printf -- '-XX:+UseG1GC -XX:+ParallelRefProcEnabled -XX:MaxGCPauseMillis=200 -XX:+UnlockExperimentalVMOptions -XX:+DisableExplicitGC -XX:+AlwaysPreTouch -XX:G1NewSizePercent=30 -XX:G1MaxNewSizePercent=40 -XX:G1HeapRegionSize=%s -XX:G1ReservePercent=20 -XX:G1HeapWastePercent=5 -XX:G1MixedGCCountTarget=4 -XX:InitiatingHeapOccupancyPercent=15 -XX:G1MixedGCLiveThresholdPercent=90 -XX:G1RSetUpdatingPauseTimePercent=5 -XX:SurvivorRatio=32 -XX:+PerfDisableSharedMem -XX:MaxTenuringThreshold=1 -Dusing.aikars.flags=https://mcflags.emc.gs -Daikars.new.flags=true' "$region"
+}
+
+perf_server_image() {
+  mysql -N -B -e "SELECT COALESCE(image,'') FROM pelican.servers WHERE uuid='$1';" 2>/dev/null | head -1
+}
+
+perf_boot_java_major() {
+  printf '%s' "$1" | grep -oE '(java|jdk)[_-]?[0-9]+' | head -1 | grep -oE '[0-9]+' || true
+}
+
+perf_boot_profiles_ok() {
+  case "$1" in
+    mc-paper|mc-fabric|mc-forge|mc-neoforge|mc-generic|proxy-java) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+perf_mods_hash() {
+  local dir="$PERF_VOLUMES/$1"
+  [ -d "$dir" ] || { echo ""; return; }
+  ( cd "$dir" 2>/dev/null && find . -maxdepth 3 \( -name '*.jar' -o -name '*.jar.disabled' \) -printf '%P:%s:%T@\n' 2>/dev/null | sort ) \
+    | md5sum 2>/dev/null | cut -d' ' -f1
+}
+
+perf_boot_state_write() {
+  # args: uuid mode [mods_hash]
+  local uuid=$1 mode=$2 hash=${3:-}
+  [ -f "$PERF_BOOT_FILE" ] || echo '{}' > "$PERF_BOOT_FILE"
+  chmod 600 "$PERF_BOOT_FILE" 2>/dev/null || true
+  if jq --arg u "$uuid" --arg m "$mode" --arg h "$hash" \
+      '.[$u] = ((.[$u] // {}) + {mode:$m, updated_at:(now | todate)}) | if $h != "" then .[$u].mods_hash = $h else . end' \
+      "$PERF_BOOT_FILE" > "$PERF_BOOT_FILE.tmp" 2>/dev/null; then
+    mv -f "$PERF_BOOT_FILE.tmp" "$PERF_BOOT_FILE" 2>/dev/null || rm -f "$PERF_BOOT_FILE.tmp"
+  else
+    rm -f "$PERF_BOOT_FILE.tmp" 2>/dev/null
+  fi
+}
+
+perf_boot_dir_ensure() {
+  local dir="$PERF_VOLUMES/$1/.perf"
+  mkdir -p "$dir" 2>/dev/null || true
+  chown pelican:pelican "$dir" 2>/dev/null || true
+}
+
+perf_boot_state() {
+  # args: uuid java_major profile [heap_mb]
+  # echoes JSON {mode, java_major, eligible_cds, eligible_aot, cache_present, stale, flags, note}
+  local uuid=$1 major=$2 profile=$3 heap=${4:-0}
+  case "$major" in ''|*[!0-9]*) major=0 ;; esac
+  case "$heap" in ''|*[!0-9]*) heap=0 ;; esac
+  local cds=false aot=false
+  if perf_boot_profiles_ok "$profile" && [ "$major" -ge 19 ]; then cds=true; fi
+  if perf_boot_profiles_ok "$profile" && [ "$major" -ge 25 ] && [ "$heap" -le 8192 ]; then aot=true; fi
+
+  local state mode
+  state=$(jq -r --arg u "$uuid" '.[$u].mode // empty' "$PERF_BOOT_FILE" 2>/dev/null)
+  case "$state" in
+    cds|aot|off) mode=$state ;;
+    *) if [ "$cds" = true ]; then mode=cds; else mode=off; fi ;;
+  esac
+  if [ "$mode" = "cds" ] && [ "$cds" != true ]; then mode=off; fi
+  if [ "$mode" = "aot" ] && [ "$aot" != true ]; then mode=off; fi
+
+  local cache=false stale=false flags="" note=""
+  if [ "$mode" = "aot" ]; then
+    [ -f "$PERF_VOLUMES/$uuid/.perf/app.aot" ] && cache=true
+    local cur_hash stored
+    cur_hash=$(perf_mods_hash "$uuid")
+    stored=$(jq -r --arg u "$uuid" '.[$u].mods_hash // empty' "$PERF_BOOT_FILE" 2>/dev/null)
+    if [ "$cache" = true ] && [ -n "$stored" ] && [ -n "$cur_hash" ] && [ "$stored" != "$cur_hash" ]; then
+      rm -f "$PERF_VOLUMES/$uuid/.perf/app.aot" 2>/dev/null || true
+      cache=false
+      stale=true
+      perf_boot_state_write "$uuid" aot "$cur_hash"
+    fi
+    if [ "$cache" = true ]; then
+      flags="-XX:AOTCache=.perf/app.aot"
+      note="Java 25+ AOT class cache is trained - reused at every boot for faster startup."
+    else
+      flags="-XX:AOTCacheOutput=.perf/app.aot"
+      note="The next Java 25+ startup trains the AOT cache (one restart); later boots reuse it."
+    fi
+  elif [ "$mode" = "cds" ]; then
+    flags="-XX:SharedArchiveFile=.perf/app.jsa -XX:+AutoCreateSharedArchive"
+    note="Java class-data-sharing archive is maintained automatically by the JVM - faster class loading, no risk."
+  elif [ "$aot" = true ]; then
+    note="Java 25+ is the default here; an AOT class cache can cut startup further - opt in from this page."
+  fi
+
+  jq -nc --arg m "$mode" --argjson j "$major" --argjson c "$cds" --argjson a "$aot" \
+    --argjson p "$cache" --argjson s "$stale" --arg f "$flags" --arg n "$note" \
+    '{mode:$m, java_major:$j, eligible_cds:$c, eligible_aot:$a, cache_present:$p, stale:$s, flags:$f, note:$n}'
+}
+
+perf_update_startup_db() {
+  # args: uuid profile
+  # recomputes heap/startup (incl. boot-cache flags) and writes servers.startup + memory
+  # echoes JSON {heap_mb, memory_mb, startup, boot_flags}
+  local uuid=$1 chosen=$2
+  local total_ram avail_ram budget eff rss_sum budget_json mem cur
+  total_ram=$(perf_ram_total_mb)
+  case "$total_ram" in ''|*[!0-9]*) total_ram=0 ;; esac
+  avail_ram=$(perf_ram_avail_mb)
+  case "$avail_ram" in ''|*[!0-9]*) avail_ram=0 ;; esac
+  eff=$(perf_docker_limit_mb "$uuid")
+  rss_sum=$(perf_docker_rss_mb "$uuid")
+  budget_json=$(perf_node_budget "$total_ram" "$avail_ram" "$rss_sum")
+  budget=$(printf '%s' "$budget_json" | jq -r '.budget_mb')
+  mem=$(mysql -N -B -e "SELECT COALESCE(memory,0) FROM pelican.servers WHERE uuid='$uuid';" 2>/dev/null); mem=${mem:-0}
+  case "$mem" in ''|*[!0-9]*) mem=0 ;; esac
+  cur=$(mysql -N -B -e "SELECT COALESCE(startup,'') FROM pelican.servers WHERE uuid='$uuid';" 2>/dev/null)
+
+  local mem_json heap recmem boot_json boot_flags rec major
+  mem_json=$(perf_recommend_memory "$chosen" "$mem" "$eff" "$budget")
+  heap=$(printf '%s' "$mem_json" | jq -r '.recommended_heap_mb')
+  recmem=$(printf '%s' "$mem_json" | jq -r '.recommended_memory_mb')
+  major=$(perf_boot_java_major "$(perf_server_image "$uuid")")
+  boot_json=$(perf_boot_state "$uuid" "$major" "$chosen" "$heap")
+  boot_flags=$(printf '%s' "$boot_json" | jq -r '.flags // empty')
+  if [ -n "$boot_flags" ]; then perf_boot_dir_ensure "$uuid"; fi
+  rec=$(perf_recommend_startup "$chosen" "$heap" "$cur" "$boot_flags")
+  mysql -e "UPDATE pelican.servers SET startup='$(perf_sql_escape "$rec")', memory=$recmem WHERE uuid='$uuid';" 2>>"$INSTALL_LOG"
+  jq -nc --arg s "$rec" --argjson h "$heap" --argjson m "$recmem" --arg f "$boot_flags" \
+    '{heap_mb:$h, memory_mb:$m, startup:$s, boot_flags:$f}'
+}
+
+perf_boot_request() {
+  # args: uuid raw_json  (op: boot_cache, mode: cds|aot|off)
+  local uuid=$1 raw=$2 mode
+  mode=$(printf '%s' "$raw" | jq -r '.mode // empty' 2>/dev/null || true)
+  case "$mode" in
+    cds|aot|off) ;;
+    *) perf_write_result "$uuid" '{"ok": false, "error": "invalid boot cache mode"}'; return 0 ;;
+  esac
+
+  local image major
+  image=$(perf_server_image "$uuid")
+  major=$(perf_boot_java_major "$image")
+  case "$major" in ''|*[!0-9]*) major=0 ;; esac
+
+  if [ "$mode" = "cds" ] && [ "$major" -lt 19 ]; then
+    perf_write_result "$uuid" "{\"ok\": false, \"error\": \"CDS needs Java 19+ (detected: ${major:-unknown})\"}"
+    return 0
+  fi
+  if [ "$mode" = "aot" ]; then
+    if [ "$major" -lt 25 ]; then
+      perf_write_result "$uuid" "{\"ok\": false, \"error\": \"AOT cache needs Java 25+ (detected: ${major:-unknown})\"}"
+      return 0
+    fi
+    local eff mem base
+    eff=$(perf_docker_limit_mb "$uuid")
+    mem=$(mysql -N -B -e "SELECT COALESCE(memory,0) FROM pelican.servers WHERE uuid='$uuid';" 2>/dev/null); mem=${mem:-0}
+    case "$mem" in ''|*[!0-9]*) mem=0 ;; esac
+    base=$eff
+    [ "$base" -le 0 ] && base=$mem
+    if [ "$base" -gt 10240 ]; then
+      perf_write_result "$uuid" "{\"ok\": false, \"error\": \"AOT cache creation runs with the same heap twice - on ${base}MB servers stay on CDS\"}"
+      return 0
+    fi
+  fi
+
+  perf_boot_state_write "$uuid" "$mode" "$(perf_mods_hash "$uuid")"
+  if [ "$mode" = "off" ]; then
+    rm -f "$PERF_VOLUMES/$uuid/.perf/app.jsa" "$PERF_VOLUMES/$uuid/.perf/app.aot" 2>/dev/null || true
+  else
+    perf_boot_dir_ensure "$uuid"
+  fi
+
+  local profile_now upd
+  profile_now=$(jq -r --arg u "$uuid" '.[$u].profile // empty' "$PERF_APPLIED_FILE" 2>/dev/null)
+  if [ -n "$profile_now" ]; then
+    upd=$(perf_update_startup_db "$uuid" "$profile_now")
+    perf_write_result "$uuid" "$(jq -nc --arg m "$mode" \
+      --arg s "$(printf '%s' "$upd" | jq -r '.startup // empty')" \
+      '{ok: true, action: "boot_cache", mode: $m, startup: $s, restart_required: true}')"
+  else
+    perf_write_result "$uuid" "$(jq -nc --arg m "$mode" '{ok: true, action: "boot_cache", mode: $m, restart_required: false}')"
+  fi
+  perf_scan
+  return 0
 }
 
 perf_recommend_startup() {
-  local profile=$1 heap=$2 startup=$3
+  local profile=$1 heap=$2 startup=$3 boot_flags=${4:-}
   local cleaned flags
   case "$profile" in
-    mc-paper|mc-fabric|mc-forge|mc-generic)
+    mc-paper|mc-fabric|mc-forge|mc-neoforge|mc-generic)
       flags=$(perf_java_flags "$heap")
       if [ "$profile" = "mc-paper" ]; then
         flags="$flags -DPaper.IgnoreJavaVersion=true"
       fi
+      [ -n "$boot_flags" ] && flags="$flags $boot_flags"
       cleaned=$(printf '%s' "$startup" | tr ' ' '\n' | grep -vE '^-(Xms|Xmx|XX:)' | paste -sd' ')
       if printf '%s' "$cleaned" | grep -qiE '(^|[[:space:]])java([[:space:]]|$)'; then
         printf '%s' "$cleaned" | sed -E "s|(java[[:space:]])|\\1-Xms${heap}M -Xmx${heap}M $flags |"
@@ -139,11 +325,12 @@ perf_recommend_startup() {
       ;;
     proxy-java)
       [ "$heap" -gt 2048 ] && heap=2048
+      [ -n "$boot_flags" ] && flags="$boot_flags"
       cleaned=$(printf '%s' "$startup" | tr ' ' '\n' | grep -vE '^-(Xms|Xmx|XX:)' | paste -sd' ')
       if printf '%s' "$cleaned" | grep -qiE '(^|[[:space:]])java([[:space:]]|$)'; then
-        printf '%s' "$cleaned" | sed -E "s|(java[[:space:]])|\\1-Xms${heap}M -Xmx${heap}M -XX:+UseG1GC -XX:G1HeapRegionSize=4M -XX:+ParallelRefProcEnabled |"
+        printf '%s' "$cleaned" | sed -E "s|(java[[:space:]])|\\1-Xms${heap}M -Xmx${heap}M -XX:+UseG1GC -XX:G1HeapRegionSize=4M -XX:+ParallelRefProcEnabled ${flags:-} |"
       else
-        printf 'java -Xms%sM -Xmx%sM %s' "$heap" "$heap" "$cleaned"
+        printf 'java -Xms%sM -Xmx%sM %s %s' "$heap" "$heap" "-XX:+UseG1GC -XX:G1HeapRegionSize=4M -XX:+ParallelRefProcEnabled" "${flags:-}"
       fi
       ;;
     source-engine)
@@ -163,8 +350,9 @@ perf_recommend_startup() {
 
 perf_profile_heap_floor_mb() {
   case "$1" in
-    mc-forge|mc-fabric) echo 4096 ;;
+    mc-forge|mc-fabric|mc-neoforge) echo 4096 ;;
     mc-paper) echo 2560 ;;
+    mc-pumpkin) echo 512 ;;
     mc-generic) echo 1024 ;;
     proxy-java) echo 1024 ;;
     *) echo 512 ;;
@@ -173,8 +361,9 @@ perf_profile_heap_floor_mb() {
 
 perf_profile_overhead_mb() {
   case "$1" in
-    mc-forge|mc-fabric) echo 1792 ;;
+    mc-forge|mc-fabric|mc-neoforge) echo 1792 ;;
     mc-paper) echo 1280 ;;
+    mc-pumpkin) echo 256 ;;
     mc-generic) echo 1024 ;;
     proxy-java) echo 640 ;;
     *) echo 384 ;;
@@ -203,6 +392,32 @@ perf_recommend_memory() {
   overhead=$(perf_profile_overhead_mb "$profile")
   maxheap=$(( budget - overhead ))
   [ "$maxheap" -lt 512 ] && maxheap=512
+
+  if [ "$profile" = "mc-pumpkin" ]; then
+    local base=$eff
+    [ "$base" -le 0 ] && base=$panel
+    if [ "$base" -le 0 ]; then
+      heap=512
+      note="Pumpkin (Rust) has no JVM - the native footprint is tiny. A ~512MB allocation keeps the host overcommit-safe."
+    else
+      heap=$(( base / 4 ))
+      [ "$heap" -lt 256 ] && heap=256
+      [ "$heap" -gt 1024 ] && heap=1024
+      note="Pumpkin needs only a fraction of a Java server's memory - the allocation can shrink to ~${heap}MB."
+    fi
+    if [ "$heap" -gt "$maxheap" ]; then
+      heap=$maxheap
+      note="$note Capped to what the host budget (${budget}MB) can hold."
+    fi
+    heap=$(( heap / 64 * 64 ))
+    [ "$heap" -lt 256 ] && heap=256
+    local precmem=$(( heap + overhead ))
+    precmem=$(( precmem / 64 * 64 ))
+    jq -nc --argjson h "$heap" --argjson m "$precmem" --argjson u false --arg n "$note" \
+      '{recommended_heap_mb:$h, recommended_memory_mb:$m, unbounded:$u, note:$n}'
+    return 0
+  fi
+
   heap=0; desired=0
   if [ "$eff" -gt 0 ]; then
     desired=$(( eff - eff / 5 ))
@@ -254,7 +469,7 @@ perf_recommend_server_props() {
   if [ "$avail" -lt 1024 ] || [ "$keepup" -ge 3 ]; then pressure=true; fi
 
   case "$profile" in
-    mc-*|generic)
+    mc-paper|mc-fabric|mc-forge|mc-neoforge|mc-generic|generic)
       cur=$(perf_prop_current "$file" sync-chunk-writes)
       add_rec sync-chunk-writes "$cur" "false" "Chunk saves moved off the main tick loop (recommended for non-Paper servers)."
       if [ "$pressure" = true ]; then
@@ -283,7 +498,7 @@ perf_recommend_jvm_args() {
   local profile=$1 dir=$2 heap=$3
   local file="$dir/user_jvm_args.txt" cur rec present=false
   case "$profile" in
-    mc-*) ;;
+    mc-paper|mc-fabric|mc-forge|mc-neoforge|mc-generic) ;;
     *) echo '{}'; return ;;
   esac
   if [ -f "$file" ]; then
@@ -295,6 +510,88 @@ perf_recommend_jvm_args() {
   rec="-Xms${heap}M -Xmx${heap}M"
   jq -nc --argjson p "$present" --arg c "$cur" --arg r "$rec" \
     '{present:$p, current:$c, recommended:$r}'
+}
+
+perf_toml_current() {
+  local file=$1 section=$2 key=$3
+  [ -f "$file" ] || return 0
+  awk -v sect="$section" -v key="$key" '
+    /^\[/ { insec = ($0 ~ ("^\\[" sect "\\]")) }
+    insec && $0 ~ ("^" key "[ \t]*=") { sub(/^[^=]*=[ \t]*/, ""); print; exit }
+  ' "$file" 2>/dev/null
+}
+
+perf_set_toml_key() {
+  local file=$1 section=$2 key=$3 val=$4 tmp
+  [ -f "$file" ] || return 1
+  tmp=$(mktemp)
+  awk -v sect="$section" -v key="$key" -v val="$val" '
+    /^\[/ { insec = ($0 ~ ("^\\[" sect "\\]")) }
+    {
+      if (insec && !done && $0 ~ ("^" key "[ \t]*=")) { print key " = " val; done=1; next }
+      print
+    }
+    END { if (!done) exit 3 }
+  ' "$file" > "$tmp" || { rm -f "$tmp"; return 1; }
+  mv -f "$tmp" "$file"
+}
+
+perf_recommend_pumpkin_toml() {
+  # args: volume_dir avail_mb cant_keep_up ping_ms
+  # echoes JSON {key: {current, recommended, reason}} for pumpkin.toml (report-only + apply-capable)
+  local dir=$1 avail=${2:-0} keepup=${3:-0} ping=${4:-}
+  local file="$dir/pumpkin.toml"
+  local out="{}" cur rec
+  [ -f "$file" ] || { echo "{}"; return; }
+  add_rec() {
+    local key=$1 cur=$2 rec=$3 reason=$4
+    [ -n "$cur" ] || return 0
+    [ "$cur" = "$rec" ] && return 0
+    out=$(jq -c --arg k "$key" --arg c "$cur" --arg r "$rec" --arg w "$reason" \
+      '. + {($k): {current: $c, recommended: $r, reason: $w}}' <<<"$out")
+  }
+  local pressure=false
+  if [ "$avail" -lt 1024 ] || [ "$keepup" -ge 3 ]; then pressure=true; fi
+
+  if [ "$pressure" = true ]; then
+    cur=$(perf_toml_current "$file" "networking.java" "view_distance")
+    case "$cur" in ''|*[!0-9]*) ;; *) if [ "$cur" -gt 10 ]; then
+      add_rec "networking.java.view_distance" "$cur" "10" "Host memory/CPU pressure - Pumpkin scales better with a tighter view distance."
+    fi ;; esac
+    cur=$(perf_toml_current "$file" "networking.java" "simulation_distance")
+    case "$cur" in ''|*[!0-9]*) ;; *) if [ "$cur" -gt 8 ]; then
+      add_rec "networking.java.simulation_distance" "$cur" "8" "Reduces per-tick simulation cost on a strained host."
+    fi ;; esac
+  fi
+  if [ -n "$ping" ] && [ "$ping" -ge 80 ]; then
+    cur=$(perf_toml_current "$file" "networking.java.compression" "threshold")
+    case "$cur" in ''|*[!0-9]*) ;; *) if [ "$cur" -gt 128 ]; then
+      add_rec "networking.java.compression.threshold" "$cur" "128" "Tunneled/slow links: compress more packets to cut latency spikes."
+    fi ;; esac
+  fi
+  cur=$(perf_toml_current "$file" "world.chunk.compression" "algorithm")
+  if [ -n "$cur" ] && [ "$cur" != '"LZ4"' ]; then
+    add_rec "world.chunk.compression.algorithm" "$cur" '"LZ4"' "LZ4 chunk compression is dramatically cheaper to save/load than ZLib."
+  fi
+  echo "$out"
+}
+
+perf_apply_pumpkin_toml() {
+  # args: uuid volume_dir recs_json
+  # echoes JSON array of applied file names
+  local uuid=$1 dir=$2 recs=$3
+  local file="$dir/pumpkin.toml"
+  [ -f "$file" ] || { echo "[]"; return; }
+  [ "$recs" != "{}" ] || { echo "[]"; return; }
+  [ -n "$recs" ] || { echo "[]"; return; }
+  perf_backup_file "$uuid" "$file" >/dev/null
+  echo "$recs" | jq -r 'to_entries[] | [.key, .value.recommended] | @tsv' 2>/dev/null \
+    | while IFS=$'\t' read -r key rec; do
+        [ -n "$key" ] || continue
+        perf_set_toml_key "$file" "${key%.*}" "${key##*.}" "$rec" || true
+      done
+  chown pelican:pelican "$file" 2>/dev/null || true
+  echo '["pumpkin.toml"]'
 }
 
 perf_detect_yaml_configs() {
@@ -315,7 +612,9 @@ perf_reason_text() {
   case "$profile" in
     mc-paper) base="PaperMC detected - G1 garbage collector tuned for low pause times." ;;
     mc-fabric) base="Fabric server detected - G1 tuned for modded workloads." ;;
-    mc-forge) base="Forge/NeoForge server detected - G1 tuned for modded workloads." ;;
+    mc-forge) base="Forge server detected - G1 tuned for modded workloads." ;;
+    mc-neoforge) base="NeoForge server detected - G1 tuned for modded workloads." ;;
+    mc-pumpkin) base="Pumpkin (Rust server) detected - no JVM tuning needed; it runs with a small native footprint." ;;
     mc-generic) base="Java Minecraft server detected - balanced Aikar-style flag set." ;;
     proxy-java) base="Proxy software detected - right-sized steady heap instead of oversized defaults." ;;
     source-engine) base="Source engine server detected - standard stable srcds arguments." ;;
@@ -327,6 +626,75 @@ perf_reason_text() {
     base="$base Recent OOM/crash activity was recorded, so the heap is conservatively sized."
   fi
   echo "$base"
+}
+
+perf_platform_advice() {
+  # args: profile volume_dir egg_name
+  # echoes JSON {verdict, current, suggested, experimental, summary, reasons[], blockers[]}
+  local profile=$1 dir=$2
+  local verdict="stay" current="unknown" suggested="" experimental=false summary="" reasons blockers
+  local has_plugins=false
+  if [ -n "$dir" ] && ls "$dir/plugins"/*.jar >/dev/null 2>&1; then
+    has_plugins=true
+  fi
+
+  case "$profile" in
+    mc-pumpkin)
+      current="Pumpkin (Rust)"; suggested="Pumpkin"
+      summary="Already on the leanest platform for vanilla-style hosting: native Rust, tiny footprint, instant boot."
+      reasons=$(jq -nc --arg a "No JVM overhang and a fraction of the RAM a Java server needs." --arg b "Java and Bedrock clients share one world." '[$a,$b]')
+      blockers=$(jq -nc --arg a "Pre-release software: keep backups and expect some vanilla mechanics to be incomplete." --arg b "Only the newest Anvil world format is supported." '[$a,$b]')
+      ;;
+    mc-paper)
+      current="Paper-family (Java)"
+      if [ "$has_plugins" = true ]; then
+        suggested="stay on Paper/Purpur"
+        summary="Plugins are in use - Paper/Purpur is the right platform and cannot be swapped for Pumpkin."
+        reasons=$(jq -nc --arg a "Paper-family plugins only run on Bukkit-based servers." --arg b "The tuned JVM/GC bundle here already covers the Java overhead." '[$a,$b]')
+        blockers=$(jq -nc '[]')
+      else
+        verdict="consider-pumpkin"
+        suggested="Pumpkin (experimental) for new worlds, Paper/Purpur for existing ones"
+        summary="No plugins detected: a vanilla-style server can often run on Pumpkin with far less RAM and a much faster boot."
+        reasons=$(jq -nc --arg a "Native Rust server boots in milliseconds and uses a fraction of the memory." --arg b "Java and Bedrock clients can join the same world." '[$a,$b]')
+        blockers=$(jq -nc --arg a "Pumpkin is pre-release: some mechanics are incomplete and worlds may break between versions." --arg b "World imports only work for the newest Anvil format - never migrate an existing world without a backup." '[$a,$b]')
+      fi
+      ;;
+    mc-generic)
+      verdict="consider-pumpkin"
+      current="Vanilla Java"
+      suggested="Pumpkin (experimental) for new worlds, Paper/Purpur for existing worlds"
+      summary="Vanilla Java servers are exactly what Pumpkin targets: same clients, a fraction of the resources."
+      reasons=$(jq -nc --arg a "No JVM, no GC pauses, instant startup." --arg b "Run several small worlds for the memory budget of one Java server." '[$a,$b]')
+      blockers=$(jq -nc --arg a "Pumpkin is pre-release: some mechanics and entity behavior are incomplete." --arg b "Anvil import works only for the newest format; keep backups." '[$a,$b]')
+      ;;
+    mc-fabric|mc-forge|mc-neoforge)
+      verdict="stay-modded"
+      current="Modded (${profile#mc-})"
+      suggested="stay modded"
+      summary="Forge/Fabric/NeoForge mods are Java code attached to Mojang's classes and cannot run on Pumpkin - optimization instead comes from server-side performance mods and the JVM boot cache."
+      reasons=$(jq -nc --arg a "Mod loaders are architecturally incompatible with Pumpkin (Rust, own plugin API)." --arg b "The optimizer-mod bundle (ModernFix, FerriteCore, ...) is the real boot/performance lever here." '[$a,$b]')
+      blockers=$(jq -nc --arg a "Switching platforms would break the modpack." '[$a]')
+      ;;
+    proxy-java)
+      current="Java proxy"; suggested="stay"
+      summary="Proxies are cheap and stable on Java; nothing to migrate."
+      reasons=$(jq -nc '[]')
+      blockers=$(jq -nc '[]')
+      ;;
+    *)
+      current="$profile"; suggested="stay"
+      summary=""
+      reasons=$(jq -nc '[]')
+      blockers=$(jq -nc '[]')
+      ;;
+  esac
+
+  [ "$verdict" = "consider-pumpkin" ] && experimental=true
+
+  jq -nc --arg v "$verdict" --arg c "$current" --arg s "$suggested" --argjson e "$experimental" \
+    --arg m "$summary" --argjson r "$reasons" --argjson b "$blockers" \
+    '{verdict:$v, current:$c, suggested:$s, experimental:$e, summary:$m, reasons:$r, blockers:$b}'
 }
 
 perf_recent_ooms() {
@@ -443,11 +811,16 @@ perf_scan() {
 
   local rows
   rows=$(mktemp)
-  local query="SELECT s.uuid, COALESCE(s.name,''), COALESCE(s.startup,''), COALESCE(s.memory,0), COALESCE(e.name,''), COALESCE(e.docker_images,'') FROM pelican.servers s LEFT JOIN pelican.eggs e ON s.egg_id = e.id WHERE s.uuid IS NOT NULL;"
+  local query="SELECT s.uuid, COALESCE(s.name,''), COALESCE(s.startup,''), COALESCE(s.memory,0), COALESCE(e.name,''), COALESCE(e.docker_images,''), COALESCE(s.image,'') FROM pelican.servers s LEFT JOIN pelican.eggs e ON s.egg_id = e.id WHERE s.uuid IS NOT NULL;"
   mysql -N -B -e "$query" 2>/dev/null > "$rows" || true
+  if [ ! -s "$rows" ]; then
+    # older panel schemas without servers.image
+    query="SELECT s.uuid, COALESCE(s.name,''), COALESCE(s.startup,''), COALESCE(s.memory,0), COALESCE(e.name,''), COALESCE(e.docker_images,''), '' FROM pelican.servers s LEFT JOIN pelican.eggs e ON s.egg_id = e.id WHERE s.uuid IS NOT NULL;"
+    mysql -N -B -e "$query" 2>/dev/null > "$rows" || true
+  fi
 
   local rss_sum=0 uuid_r
-  while IFS=$'\t' read -r uuid_r _ _ _ _ _; do
+  while IFS=$'\t' read -r uuid_r _ _ _ _ _ _; do
     [ -n "$uuid_r" ] || continue
     rss_sum=$(( rss_sum + $(perf_docker_rss_mb "$uuid_r") ))
   done < "$rows"
@@ -459,12 +832,13 @@ perf_scan() {
 
   local sum_allocated=0 sum_recommended=0 server_count=0
 
-  while IFS=$'\t' read -r uuid name startup memory egg_name images; do
+  while IFS=$'\t' read -r uuid name startup memory egg_name images image; do
     [ -n "$uuid" ] || continue
     memory=${memory:-0}
     case "$memory" in ''|*[!0-9]*) memory=0 ;; esac
     local profile rec reason ooms mem_json heap recmem unb mnote
-    local eff rss restarts keepup props jvms yamlc slow
+    local eff rss restarts keepup props jvms yamlc pumpkin slow
+    local boot_json boot_mode boot_flags upd mods advice
     profile=$(perf_detect_profile "$egg_name" "$images" "$startup")
     eff=$(perf_docker_limit_mb "$uuid")
     rss=$(perf_docker_rss_mb "$uuid")
@@ -475,12 +849,34 @@ perf_scan() {
     recmem=$(printf '%s' "$mem_json" | jq -r '.recommended_memory_mb')
     unb=$(printf '%s' "$mem_json" | jq -r '.unbounded')
     mnote=$(printf '%s' "$mem_json" | jq -r '.note')
-    rec=$(perf_recommend_startup "$profile" "$heap" "$startup")
+    boot_json=$(perf_boot_state "$uuid" "$(perf_boot_java_major "$image")" "$profile" "$heap")
+    boot_mode=$(printf '%s' "$boot_json" | jq -r '.mode // "off"')
+    boot_flags=$(printf '%s' "$boot_json" | jq -r '.flags // empty')
+    # AOT opt-in: once the training run produced a cache, switch the applied
+    # startup from "train" to "use" automatically (the admin opted in already).
+    if [ "$boot_mode" = "aot" ] \
+       && [ "$(printf '%s' "$boot_json" | jq -r '.cache_present // false')" = "true" ] \
+       && printf '%s' "$startup" | grep -q 'AOTCacheOutput' \
+       && [ -f "$PERF_APPLIED_FILE" ] \
+       && jq -e --arg u "$uuid" '.[$u] != null' "$PERF_APPLIED_FILE" >/dev/null 2>&1; then
+      upd=$(perf_update_startup_db "$uuid" "$profile")
+      startup=$(printf '%s' "$upd" | jq -r '.startup // empty')
+      boot_flags=$(printf '%s' "$upd" | jq -r '.boot_flags // empty')
+      log "Server $uuid: AOT cache trained - startup switched to cached class loading."
+    fi
+    rec=$(perf_recommend_startup "$profile" "$heap" "$startup" "$boot_flags")
     ooms=$(perf_recent_ooms "$uuid")
     reason=$(perf_reason_text "$profile" "$ooms")
     props=$(perf_recommend_server_props "$profile" "$PERF_VOLUMES/$uuid" "$avail_ram" "$load1" "$cores" "$keepup")
     jvms=$(perf_recommend_jvm_args "$profile" "$PERF_VOLUMES/$uuid" "$heap")
     yamlc=$(perf_detect_yaml_configs "$PERF_VOLUMES/$uuid")
+    pumpkin=$(perf_recommend_pumpkin_toml "$PERF_VOLUMES/$uuid" "$avail_ram" "$keepup" "$ping_ms")
+    mods='{}'
+    if command -v modopt_scan >/dev/null 2>&1; then
+      mods=$(modopt_scan "$uuid" "$profile" 2>/dev/null) || mods='{}'
+      case "$mods" in \{*) ;; *) mods='{}' ;; esac
+    fi
+    advice=$(perf_platform_advice "$profile" "$PERF_VOLUMES/$uuid" "$egg_name")
     slow=false
     if [ -n "$ping_ms" ] && [ "$ping_ms" -ge 80 ] 2>/dev/null; then slow=true; fi
     if [ "$avail_ram" -lt 1024 ]; then slow=true; fi
@@ -493,7 +889,8 @@ perf_scan() {
       --argjson eff "$eff" --argjson rss "$rss" \
       --argjson recmem "$recmem" --argjson heap "$heap" --argjson unb "$unb" --arg mn "$mnote" \
       --argjson rst "$restarts" --argjson kpu "$keepup" \
-      --argjson pr "$props" --argjson jv "$jvms" --argjson ym "$yamlc" \
+      --argjson pr "$props" --argjson jv "$jvms" --argjson ym "$yamlc" --argjson pkt "$pumpkin" \
+      --argjson bc "$boot_json" --argjson mo "$mods" --argjson pa "$advice" \
       --argjson ping "${ping_ms:-null}" --argjson slow "$slow" \
       '{uuid:$id, name:$n, profile:$p, current_startup:$cur,
         recommended_startup:$rec, reason:$r, memory_mb:$m, recent_ooms:$o,
@@ -501,7 +898,8 @@ perf_scan() {
         recommended_memory_mb:$recmem, recommended_heap_mb:$heap,
         unbounded:$unb, mem_note:$mn,
         restart_count:$rst, cant_keep_up_count:$kpu,
-        file_recs:{"server.properties":$pr, user_jvm_args:$jv, yaml_configs:$ym},
+        boot_cache:$bc, platform_advice:$pa,
+        file_recs:{"server.properties":$pr, user_jvm_args:$jv, yaml_configs:$ym, "pumpkin.toml":$pkt, optimizer_mods:$mo},
         network:{ping_ms:(if $ping == null then null else $ping end), slow_link:$slow}}' >> "$lines" 2>/dev/null || true
   done < "$rows"
   rm -f "$rows"
@@ -575,6 +973,21 @@ perf_apply_request() {
     return 0
   fi
 
+  case "$op" in
+    boot_cache)
+      perf_boot_request "$uuid" "$raw"
+      return 0
+      ;;
+    mods_apply|mods_revert)
+      if command -v modopt_request >/dev/null 2>&1; then
+        modopt_request "$uuid" "$op"
+      else
+        perf_write_result "$uuid" '{"ok": false, "error": "optimizer mods support is not installed on this host"}'
+      fi
+      return 0
+      ;;
+  esac
+
   if [ "$op" = "revert" ]; then
     local original memory_old files
     original=$(jq -r --arg u "$uuid" '.[$u].original_startup // empty' "$PERF_APPLIED_FILE" 2>/dev/null)
@@ -596,30 +1009,28 @@ perf_apply_request() {
     return 0
   fi
 
-  local total_ram avail_ram budget eff mem cur rss_sum
-  total_ram=$(perf_ram_total_mb)
-  case "$total_ram" in ''|*[!0-9]*) total_ram=0 ;; esac
-  avail_ram=$(perf_ram_avail_mb)
-  case "$avail_ram" in ''|*[!0-9]*) avail_ram=0 ;; esac
-  eff=$(perf_docker_limit_mb "$uuid")
-  rss_sum=$(perf_docker_rss_mb "$uuid")
-  budget_json=$(perf_node_budget "$total_ram" "$avail_ram" "$rss_sum")
-  budget=$(printf '%s' "$budget_json" | jq -r '.budget_mb')
+  local profile_now chosen upd heap rec recmem mem cur
+  profile_now=$(jq -r --arg u "$uuid" '.servers[$u].profile // "generic"' "$PERF_REC_FILE" 2>/dev/null)
+  chosen=${profile:-$profile_now}
   mem=$(mysql -N -B -e "SELECT COALESCE(memory,0) FROM pelican.servers WHERE uuid='$uuid';" 2>/dev/null); mem=${mem:-0}
   case "$mem" in ''|*[!0-9]*) mem=0 ;; esac
   cur=$(mysql -N -B -e "SELECT COALESCE(startup,'') FROM pelican.servers WHERE uuid='$uuid';" 2>/dev/null)
 
-  local profile_now chosen mem_json heap rec recmem
-  profile_now=$(jq -r --arg u "$uuid" '.servers[$u].profile // "generic"' "$PERF_REC_FILE" 2>/dev/null)
-  chosen=${profile:-$profile_now}
-  mem_json=$(perf_recommend_memory "$chosen" "$mem" "$eff" "$budget")
-  heap=$(printf '%s' "$mem_json" | jq -r '.recommended_heap_mb')
-  recmem=$(printf '%s' "$mem_json" | jq -r '.recommended_memory_mb')
-  rec=$(perf_recommend_startup "$chosen" "$heap" "$cur")
+  upd=$(perf_update_startup_db "$uuid" "$chosen")
+  heap=$(printf '%s' "$upd" | jq -r '.heap_mb')
+  rec=$(printf '%s' "$upd" | jq -r '.startup // empty')
+  recmem=$(printf '%s' "$upd" | jq -r '.memory_mb')
 
   local props files_applied
   props=$(perf_recommend_server_props "$chosen" "$PERF_VOLUMES/$uuid" "$(perf_ram_avail_mb)" "0" "$(perf_core_count)" "$(perf_cant_keep_up "$uuid")")
   files_applied=$(perf_apply_files "$uuid" "$PERF_VOLUMES/$uuid" "$props" "$heap")
+  if [ "$chosen" = "mc-pumpkin" ]; then
+    local pumprecs pumpkin_applied
+    pumprecs=$(perf_recommend_pumpkin_toml "$PERF_VOLUMES/$uuid" "$(perf_ram_avail_mb)" "$(perf_cant_keep_up "$uuid")" "")
+    pumpkin_applied=$(perf_apply_pumpkin_toml "$uuid" "$PERF_VOLUMES/$uuid" "$pumprecs")
+    files_applied=$(jq -nc --argjson a "$files_applied" --argjson b "$pumpkin_applied" '$a + $b' 2>/dev/null) \
+      || files_applied="$files_applied"
+  fi
 
   jq --arg u "$uuid" --arg p "$chosen" --arg o "$cur" --argjson m "$mem" --argjson f "$files_applied" \
     '.[$u] = {profile: $p, original_startup: $o, memory_old: $m, applied_at: (now | todate), files: $f}' \
@@ -628,7 +1039,6 @@ perf_apply_request() {
 
   perf_mirror_applied
 
-  mysql -e "UPDATE pelican.servers SET startup='$(perf_sql_escape "$rec")', memory=$recmem WHERE uuid='$uuid';" 2>>"$INSTALL_LOG"
   log "Server $uuid: applied '$chosen' tuning - startup, memory=${recmem}MB and config files (restart the server to take effect)."
   local result_json
   result_json=$(jq -nc --arg s "$rec" --argjson m "$recmem" --argjson f "$files_applied" \

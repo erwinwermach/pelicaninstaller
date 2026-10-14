@@ -23,6 +23,18 @@ rust-lang|https://raw.githubusercontent.com/pelican-eggs/generic/refs/heads/main
 # discord bots
 discord-red|https://raw.githubusercontent.com/pelican-eggs/chatbots/refs/heads/main/discord/redbot/egg-red.json|tcp
 discord-ree6|https://raw.githubusercontent.com/pelican-eggs/chatbots/refs/heads/main/discord/ree6/egg-ree6.json|tcp
+# minecraft platforms (server software matrix incl. Rust-based Pumpkin)
+paper|https://raw.githubusercontent.com/pelican-eggs/minecraft/refs/heads/main/java/paper/egg-paper.yaml|tcp
+purpur|https://raw.githubusercontent.com/pelican-eggs/minecraft/refs/heads/main/java/purpur/egg-purpur.yaml|tcp
+folia|https://raw.githubusercontent.com/pelican-eggs/minecraft/refs/heads/main/java/folia/egg-folia.yaml|tcp
+vanilla|https://raw.githubusercontent.com/pelican-eggs/minecraft/refs/heads/main/java/vanilla/egg-vanilla-minecraft.yaml|tcp
+fabric|https://raw.githubusercontent.com/pelican-eggs/minecraft/refs/heads/main/java/fabric/egg-fabric.yaml|tcp
+forge|https://raw.githubusercontent.com/pelican-eggs/minecraft/refs/heads/main/java/forge/egg-forge-minecraft.yaml|tcp
+neoforge|https://raw.githubusercontent.com/pelican-eggs/minecraft/refs/heads/main/java/neoforge/egg-neo-forge.json|tcp
+quilt|https://raw.githubusercontent.com/pelican-eggs/minecraft/refs/heads/main/java/quilt/egg-quilt.yaml|tcp
+velocity|https://raw.githubusercontent.com/pelican-eggs/minecraft/refs/heads/main/proxy/java/velocity/egg-velocity.json|tcp
+bungeecord|https://raw.githubusercontent.com/pelican-eggs/minecraft/refs/heads/main/proxy/java/bungeecord/egg-bungeecord.yaml|tcp
+pumpkin|file:eggs/pumpkin.yaml|tcp
 EOF
 }
 
@@ -54,6 +66,12 @@ egg_selected() {
             python|nodejs|rust-lang) echo "$name|$url" ;;
           esac
           ;;
+        minecraft)
+          case "$name" in
+            paper|purpur|folia|vanilla|fabric|forge|neoforge|quilt|velocity|bungeecord|pumpkin)
+              echo "$name|$url" ;;
+          esac
+          ;;
         all) echo "$name|$url" ;;
       esac
     done
@@ -80,11 +98,24 @@ eggs_phase() {
     log "Importing egg '$name' from $url"
     local body code egg_tmp
     egg_tmp=$(mktemp)
-    if ! run_with_heartbeat "egg download ($name)" 120 curl -fsSL -m 60 -o "$egg_tmp" "$url"; then
-      rm -f "$egg_tmp"
-      log_err "Could not download egg '$name' from $url"
-      continue
-    fi
+    case "$url" in
+      file:*)
+        local local_egg="$SCRIPT_DIR/${url#file:}"
+        if [ ! -f "$local_egg" ]; then
+          rm -f "$egg_tmp"
+          log_err "Vendored egg '$name' missing at $local_egg"
+          continue
+        fi
+        cp -f "$local_egg" "$egg_tmp"
+        ;;
+      *)
+        if ! run_with_heartbeat "egg download ($name)" 120 curl -fsSL -m 60 -o "$egg_tmp" "$url"; then
+          rm -f "$egg_tmp"
+          log_err "Could not download egg '$name' from $url"
+          continue
+        fi
+        ;;
+    esac
     body=$(cat "$egg_tmp")
     rm -f "$egg_tmp"
     code=$(app_api_raw POST /eggs/import "$body")

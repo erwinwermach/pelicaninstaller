@@ -211,6 +211,8 @@ server_tacz_fix
 
 # shellcheck source=../lib/perfctl.sh
 . "$HEAL_DIR/lib/perfctl.sh"
+# shellcheck source=../lib/modopt.sh
+. "$HEAL_DIR/lib/modopt.sh"
 run_with_heartbeat "performance scan" 900 perf_scan || hlog "performance scan reported problems"
 perfctl_process_requests
 

@@ -1,27 +1,66 @@
 ensure_php_ppa() {
-  # Current Pelican releases require PHP 8.4+, which the Ubuntu 24.04 archives
-  # do not ship - add the ondrej/php PPA when no 8.4/8.5 candidate is available.
-  local v
-  for v in 8.5 8.4; do
-    if apt-cache policy "php$v-fpm" 2>/dev/null | grep -qE 'Candidate: [0-9]'; then
-      return 0
+  # Current Pelican releases require PHP 8.4+. Ubuntu 26.04 ships php8.4 in the
+  # universe component (disabled on minimized images); older releases need the
+  # ondrej/php PPA. The PPA only publishes for supported series - adding it for
+  # an unsupported one (e.g. 26.04 "resolute") breaks every later apt-get
+  # update, so it is only used after verifying the series exists.
+  local v codename
+  codename=$(. /etc/os-release 2>/dev/null; echo "${VERSION_CODENAME:-}")
+
+  # Drop a broken ondrej source left by an earlier run (unsupported series)
+  # that would keep breaking apt-get update.
+  if ls /etc/apt/sources.list.d/ondrej-* >/dev/null 2>&1; then
+    if ! apt-get -y -o DPkg::Lock::Timeout=300 update >>"$INSTALL_LOG" 2>&1; then
+      log "Removing a broken ondrej/php apt source (apt-get update fails with it)..."
+      rm -f /etc/apt/sources.list.d/ondrej-*
+      apt-get -y update >>"$INSTALL_LOG" 2>&1 || true
     fi
-  done
-  log "No PHP 8.4+ in the configured apt sources - adding the ondrej/php PPA..."
+  fi
+
+  run_with_heartbeat "apt-get update" 600 \
+    apt-get -y -o DPkg::Lock::Timeout=300 update || true
+  v=$(detect_php_version)
+  if [ -n "$v" ]; then
+    log "PHP $v available from the Ubuntu archives."
+    return 0
+  fi
+
+  log "PHP 8.4+ is not visible yet - enabling the 'universe' component (Ubuntu 26.04 ships PHP 8.4 there)..."
+  if ! command -v add-apt-repository >/dev/null 2>&1; then
+    run_with_heartbeat "software-properties-common install" 600 \
+      apt-get -y -o DPkg::Lock::Timeout=300 install software-properties-common || true
+  fi
+  run_with_heartbeat "apt universe enable" 300 \
+    env LC_ALL=C.UTF-8 add-apt-repository -y universe || log_err "Could not enable universe (continuing)."
+  v=$(detect_php_version)
+  if [ -n "$v" ]; then
+    log "PHP $v available from the Ubuntu archives."
+    return 0
+  fi
+
+  if [ -n "$codename" ] && ! curl -fsI -m 15 \
+      "https://ppa.launchpadcontent.net/ondrej/php/ubuntu/dists/$codename/Release" >/dev/null 2>&1; then
+    log_err "No PHP 8.4+ available: the Ubuntu archives have none and ondrej/php does not publish for '${codename}'."
+    return 1
+  fi
+
+  log "Adding the ondrej/php PPA for PHP 8.4+..."
   run_with_heartbeat "software-properties-common install" 600 \
     apt-get -y -o DPkg::Lock::Timeout=300 install software-properties-common || true
   run_with_heartbeat "adding the ondrej/php PPA" 300 \
-    env LC_ALL=C.UTF-8 add-apt-repository -y ppa:ondrej/php || {
+    env LC_ALL=C.UTF-8 add-apt-repository -y -n ppa:ondrej/php || {
     log_err "Could not add ppa:ondrej/php (network or apt problem)."
     return 1
   }
-  run_with_heartbeat "apt-get update (ondrej PPA)" 600 \
-    apt-get -y -o DPkg::Lock::Timeout=300 update || true
-  for v in 8.5 8.4; do
-    if apt-cache policy "php$v-fpm" 2>/dev/null | grep -qE 'Candidate: [0-9]'; then
-      return 0
-    fi
-  done
+  if ! run_with_heartbeat "apt-get update (ondrej PPA)" 600 \
+       apt-get -y -o DPkg::Lock::Timeout=300 update; then
+    log_err "apt-get update failed with ppa:ondrej/php enabled - removing it again."
+    rm -f /etc/apt/sources.list.d/ondrej-*
+    apt-get -y update >>"$INSTALL_LOG" 2>&1 || true
+    return 1
+  fi
+  v=$(detect_php_version)
+  [ -n "$v" ] && return 0
   return 1
 }
 
@@ -51,15 +90,17 @@ panel_php_requirement() {
 }
 
 detect_php_version() {
-  apt-get update -y >>"$INSTALL_LOG" 2>&1 || true
+  # Newest available phpX.Y-fpm that satisfies the panel floor (>= 8.4).
+  # Callers refresh the apt lists first.
   local v
-  for v in 8.5 8.4; do
-    if apt-cache show "php$v-fpm" >/dev/null 2>&1 && [ "$(apt-cache policy "php$v-fpm" 2>/dev/null | grep -c Candidate)" != "0" ]; then
-      if ! apt-cache policy "php$v-fpm" 2>/dev/null | grep -q 'Candidate: (none)'; then
+  for v in $(apt-cache search --names-only '^php[0-9]+\.[0-9]+-fpm$' 2>/dev/null \
+             | awk '{print $1}' | sed 's/^php//; s/-fpm$//' | sort -Vr || true); do
+    case "$v" in
+      8.[4-9]|9.*|1[0-9].*)
         echo "$v"
         return 0
-      fi
-    fi
+        ;;
+    esac
   done
   echo ""
 }
@@ -146,7 +187,7 @@ panel_phase() {
   NODE_FQDN="$NODE_SUBDOMAIN.$DOMAIN"
 
   log "Detecting available PHP version..."
-  ensure_php_ppa || die "Pelican requires PHP 8.4+ and the ondrej/php PPA could not be enabled. Check network/apt and re-run."
+  ensure_php_ppa || die "Pelican requires PHP 8.4+, but none is available or installable for this Ubuntu release (see $INSTALL_LOG)."
   local detected
   detected=$(detect_php_version)
   PHP_VER="${PHP_VER:-$detected}"
@@ -512,14 +553,14 @@ echo 'perms=' . \$role->permissions()->count() . PHP_EOL;
 
 egg_images_phase() {
   banner "Phase 5 - Updating eggs with modern Java images"
-  log "Adding Java 21/22 docker images to Java-based eggs..."
+  log "Adding Java 21/22/25 docker images to Java-based eggs..."
   mysql <<SQL 2>>"$INSTALL_LOG" || true
 UPDATE pelican.eggs
-SET docker_images = JSON_SET(docker_images, '$."Java 21"', 'ghcr.io/pelican-eggs/yolks:java_21', '$."Java 22"', 'ghcr.io/pelican-eggs/yolks:java_22')
+SET docker_images = JSON_SET(docker_images, '$."Java 21"', 'ghcr.io/pelican-eggs/yolks:java_21', '$."Java 22"', 'ghcr.io/pelican-eggs/yolks:java_22', '$."Java 25"', 'ghcr.io/pelican-eggs/yolks:java_25')
 WHERE docker_images LIKE '%yolks:java_%'
-  AND JSON_UNQUOTE(JSON_EXTRACT(docker_images, '$."Java 21"')) IS NULL;
+  AND JSON_UNQUOTE(JSON_EXTRACT(docker_images, '$."Java 25"')) IS NULL;
 SQL
-  log "Egg images updated (modern Minecraft requires Java 21+)."
+  log "Egg images updated (modern Minecraft requires Java 21+; newest releases run best on Java 25)."
 }
 
 nginx_enable_phase() {

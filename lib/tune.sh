@@ -141,6 +141,101 @@ add_static_caching() {
   restart_service nginx
 }
 
+tune_cpu_governor() {
+  local mode=${TUNE_CPU_GOVERNOR:-off}
+  case "$mode" in
+    off|no) return 0 ;;
+  esac
+  local gov
+  gov=$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null || true)
+  [ -n "$gov" ] || return 0
+  if [ "$mode" != "performance" ] && [ "$gov" != "powersave" ]; then
+    return 0
+  fi
+  cat > /etc/systemd/system/pelican-cpu-governor.service <<'EOF'
+[Unit]
+Description=Set CPU governor to performance (pelican game-host tuning)
+After=multi-user.target
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'for c in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do [ -w "$c" ] && echo performance > "$c"; done'
+[Install]
+WantedBy=multi-user.target
+EOF
+  systemctl daemon-reload 2>/dev/null || true
+  systemctl enable --now pelican-cpu-governor.service >/dev/null 2>&1 \
+    || log_err "Could not enable the CPU governor service (non-fatal)."
+}
+
+tune_sysctl() {
+  local mode=${TUNE_SYSCTL:-no}
+  case "$mode" in
+    yes|on|true) ;;
+    *) return 0 ;;
+  esac
+  cat > /etc/sysctl.d/99-pelican-game.conf <<'EOF'
+# pelicaninstaller opt-in game-host tuning
+vm.max_map_count = 262144
+vm.dirty_ratio = 10
+vm.dirty_background_ratio = 5
+net.ipv4.tcp_fastopen = 3
+EOF
+  if modprobe tcp_bbr >/dev/null 2>&1 || grep -q '^tcp_bbr' /proc/modules 2>/dev/null; then
+    printf 'net.core.default_qdisc = fq\nnet.ipv4.tcp_congestion_control = bbr\n' >> /etc/sysctl.d/99-pelican-game.conf
+  fi
+  sysctl --system >/dev/null 2>&1 || log_err "sysctl reload reported problems (non-fatal)."
+}
+
+tune_zram() {
+  local mode=${TUNE_ZRAM:-off}
+  case "$mode" in
+    auto|yes|on) ;;
+    *) return 0 ;;
+  esac
+  if swapon --show=NAME --noheadings 2>/dev/null | grep -q zram; then
+    return 0
+  fi
+  local total zram_mb
+  total=$(total_ram_mb)
+  if [ "$mode" = "auto" ] && [ "$total" -ge 8192 ]; then
+    return 0
+  fi
+  zram_mb=$(( total / 4 ))
+  [ "$zram_mb" -lt 512 ] && zram_mb=512
+  [ "$zram_mb" -gt 4096 ] && zram_mb=4096
+  cat > /etc/systemd/system/pelican-zram.service <<EOF
+[Unit]
+Description=zram swap for low-memory game hosting (pelican tuning)
+After=multi-user.target
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -c 'modprobe zram || exit 0; dev=\$(zramctl --find --size ${zram_mb}M --algorithm lz4) || exit 0; mkswap "\$dev" >/dev/null && swapon -p 100 "\$dev"'
+ExecStop=/bin/sh -c 'swapon -s | awk "NR>1 {print \\\$1}" | grep "^/dev/zram" | while read d; do swapoff "\$d"; done; for d in /dev/zram*; do zramctl --reset "\$d" 2>/dev/null || true; done'
+[Install]
+WantedBy=multi-user.target
+EOF
+  systemctl daemon-reload 2>/dev/null || true
+  systemctl enable --now pelican-zram.service >/dev/null 2>&1 \
+    || log_err "zram setup failed (kernel support missing?) - non-fatal."
+}
+
+tune_io_scheduler() {
+  local mode=${TUNE_IO_SCHEDULER:-off}
+  case "$mode" in
+    auto|on|yes) ;;
+    *) return 0 ;;
+  esac
+  cat > /etc/udev/rules.d/60-pelican-io-scheduler.rules <<'EOF'
+# pelicaninstaller opt-in low-latency IO for game server hosts
+ACTION=="add|change", KERNEL=="nvme[0-9]*n[0-9]*", ATTR{queue/scheduler}="none"
+ACTION=="add|change", KERNEL=="sd[a-z]*", ATTR{queue/scheduler}="mq-deadline"
+ACTION=="add|change", KERNEL=="vd[a-z]*", ATTR{queue/scheduler}="mq-deadline"
+EOF
+  udevadm control --reload-rules >/dev/null 2>&1 || true
+  udevadm trigger --subsystem-match=block >/dev/null 2>&1 || true
+}
+
 tune_phase() {
   banner "Phase 9 - Low-end hardware tuning"
   log "Applying PHP-FPM/opcache tuning..."
@@ -152,6 +247,11 @@ tune_phase() {
   log "Applying nginx gzip/caching tuning..."
   tune_nginx
   add_static_caching
+  log "Applying opt-in game-host tuning (CPU governor, sysctls, zram, IO scheduler)..."
+  tune_cpu_governor
+  tune_sysctl
+  tune_zram
+  tune_io_scheduler
   log "Optimizing panel caches..."
   panel_optimize || true
 }

@@ -121,7 +121,9 @@ log_err() {
 die() {
   log_err "$*"
   echo ""
-  echo "Installation failed. Logs: $INSTALL_LOG"
+  echo "Installation failed."
+  echo "Reason: $*"
+  echo "Logs: $INSTALL_LOG"
   echo "Fix the issue and re-run the installer - it resumes where it stopped."
   exit 1
 }
@@ -261,7 +263,7 @@ run_with_heartbeat() {
   local label=$1 timeout_s=$2
   shift 2
   "$@" >>"$INSTALL_LOG" 2>&1 &
-  local pid=$! waited=0 ticks=0 next_report=60 last_line
+  local pid=$! waited=0 ticks=0 next_report=60 last_line rc=0
   local interval="${RUN_HEARTBEAT_INTERVAL:-15}"
   [ "$interval" -ge 1 ] 2>/dev/null || interval=15
   log "$label started (timeout ${timeout_s}s) - live log: tail -f $INSTALL_LOG"
@@ -285,7 +287,15 @@ run_with_heartbeat() {
       log "$label still running (${waited}s): ${last_line:0:140}"
     fi
   done
-  wait "$pid"
+  if wait "$pid"; then
+    rc=0
+  else
+    rc=$?
+  fi
+  if [ "$rc" -ne 0 ]; then
+    log_err "$label failed (exit $rc) - see $INSTALL_LOG"
+  fi
+  return "$rc"
 }
 
 run_heartbeat_sh() {
