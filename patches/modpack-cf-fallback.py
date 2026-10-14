@@ -88,11 +88,12 @@ def patch_service(path):
     if n != 1:
         return fail("constructor tail not found in %s" % path)
 
-    # 3. graceful guards on every public API method
+    # 3. graceful guards on every public API method (v1.6.12 adds
+    #    getContentCategories and getDescription)
     guards = {
-        "search|searchContent|getMinecraftVersions|getCategories|getMod|getFiles|getFile|getFilesByIds|getModClasses": "return [];",
+        "search|searchContent|getMinecraftVersions|getCategories|getContentCategories|getMod|getFiles|getFile|getFilesByIds|getModClasses": "return [];",
         "findServerPackForFile": "return null;",
-        "getDownloadUrl": "return '';",
+        "getDownloadUrl|getDescription": "return '';",
     }
     for names, ret in guards.items():
         pat = re.compile(r"(public function (?:%s)\([^)]*\)(?:: [\w?]+)?\n    \{)" % names)
@@ -112,42 +113,43 @@ def patch_modpack_page(path):
     src = read(path)
     if src is None:
         return fail("missing %s" % path)
-    if "->isAvailable()" in src:
+    if "!app(CurseForgeService::class)->isAvailable()" in src:
         return True
 
-    src, n = re.subn(
+    # Guard the CurseForge call sites; newer releases already wrap them in
+    # try/catch, so these two edits are best-effort and only applied when the
+    # unguarded shape is present.
+    src, n_versions = re.subn(
         r"        \$versions = app\(CurseForgeService::class\)->getMinecraftVersions\(\);",
         "        $cf = app(CurseForgeService::class);\n"
         "        $versions = $cf->isAvailable() ? $cf->getMinecraftVersions() : [];",
         src, count=1)
-    if n != 1:
-        return fail("getFilterVersionOptions not found in %s" % path)
-
-    src, n = re.subn(
+    src, n_categories = re.subn(
         r"        \$categories = app\(CurseForgeService::class\)->getCategories\(\);",
         "        $cf = app(CurseForgeService::class);\n"
         "        $categories = $cf->isAvailable() ? $cf->getCategories() : [];",
         src, count=1)
-    if n != 1:
-        return fail("getFilterCategoryOptions not found in %s" % path)
 
-    src, n = re.subn(
-        r"    public function setProvider\(string \$provider\): void\n    \{\n        \$this->provider = \$provider;",
-        "    public function setProvider(string $provider): void\n"
-        "    {\n"
-        "        if ($provider === 'curseforge' && !app(CurseForgeService::class)->isAvailable()) {\n"
-        "            $provider = 'all';\n"
-        "        }\n"
-        "        $this->provider = $provider;",
-        src, count=1)
-    if n != 1:
+    clamp = ("        if ($provider === 'curseforge' && !app(CurseForgeService::class)->isAvailable()) {\n"
+             "            $provider = 'all';\n"
+             "        }\n")
+    # v1.6.12+ validates the provider against an allow-list before assigning it.
+    src, n_clamp = re.subn(
+        r"(public function setProvider\(string \$provider\): void\n    \{\n        if \(!in_array\(\$provider, \[[^\]]*\], true\)\) \{\n            return;\n        \}\n)",
+        lambda m: m.group(1) + "\n" + clamp, src, count=1)
+    if n_clamp != 1:
+        src, n_clamp = re.subn(
+            r"    public function setProvider\(string \$provider\): void\n    \{\n        \$this->provider = \$provider;",
+            "    public function setProvider(string $provider): void\n    {\n" + clamp + "        $this->provider = $provider;",
+            src, count=1)
+    if n_clamp != 1:
         return fail("setProvider not found in %s" % path)
 
     try:
         write_atomic(path, src)
     except OSError as exc:
         return fail("cannot write %s (%s)" % (path, exc))
-    print("patched %s" % path)
+    print("patched %s (call-site guards: versions=%d categories=%d)" % (path, n_versions, n_categories))
     return True
 
 

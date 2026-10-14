@@ -37,6 +37,24 @@ app_api_raw() {
   echo "$APP_CODE"
 }
 
+app_api_raw_file() {
+  # Same contract as app_api_raw but streams the body from a file: some eggs
+  # are >128 KiB and "-d $body" dies with E2BIG (MAX_ARG_STRLEN), which used
+  # to crash the installer. Call WITHOUT command substitution so APP_CODE and
+  # APP_RESP_RAW land in the caller shell.
+  local method=$1 path=$2 file=$3
+  local args=(-sS -X "$method" "$APP_API_BASE$path" \
+    -H "Authorization: Bearer ${API_KEY_ID}${API_KEY_SECRET}" \
+    -H "Accept: application/json" \
+    -H "Content-Type: application/octet-stream" \
+    --data-binary @"$file")
+  APP_RESP_RAW=$(curl "${args[@]}" -m 60 -k -w $'\n%{http_code}' 2>/dev/null || true)
+  APP_CODE=${APP_RESP_RAW##*$'\n'}
+  APP_RESP_RAW=${APP_RESP_RAW%$'\n'*}
+  echo "$APP_CODE"
+  return 0
+}
+
 ensure_app_api_key() {
   if [ -f "$API_KEY_FILE" ]; then
     API_KEY_ID=$(grep -E '^API_KEY_ID=' "$API_KEY_FILE" | cut -d= -f2-)

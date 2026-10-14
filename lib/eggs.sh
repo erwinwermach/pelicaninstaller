@@ -110,7 +110,7 @@ eggs_phase() {
   while IFS='|' read -r name url; do
     [ -n "$name" ] || continue
     log "Importing egg '$name' from $url"
-    local body code egg_tmp uuid slug
+    local code raw egg_tmp uuid slug
     egg_tmp=$(mktemp)
     case "$url" in
       file:*)
@@ -137,19 +137,20 @@ eggs_phase() {
       rm -f "$egg_tmp"
       continue
     fi
-    body=$(cat "$egg_tmp")
+    app_api_raw_file POST /eggs/import "$egg_tmp" >/dev/null
+    code=${APP_CODE:-}
+    raw=${APP_RESP_RAW:-}
     rm -f "$egg_tmp"
-    code=$(app_api_raw POST /eggs/import "$body")
     case "$code" in
       201|200)
         log "Egg '$name' imported."
         count_imported=$((count_imported + 1))
         ;;
       422|400)
-        log_err "Egg '$name' rejected by panel (bad format?): $APP_RESP_RAW"
+        log_err "Egg '$name' rejected by panel (bad format?): ${raw:0:300}"
         ;;
       *)
-        log_err "Egg '$name' import failed (HTTP $code): $APP_RESP_RAW"
+        log_err "Egg '$name' import failed (HTTP ${code:-none}): ${raw:0:300}"
         ;;
     esac
     sleep 1
