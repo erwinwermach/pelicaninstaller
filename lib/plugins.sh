@@ -166,6 +166,23 @@ plugins_patch_modpack() {
   else
     log_err "modpack-manager CurseForge fallback patch reported failures - will retry on the next heal/update run."
   fi
+  plugins_fix_permissions
+}
+
+plugins_fix_permissions() {
+  # Repairs plugin-tree ownership/permissions. Older patcher versions replaced
+  # files with 0600 root-owned temp files, which made php-fpm fail with
+  # "Permission denied" on every page that loads the plugin.
+  local pdir="$PANEL_DIR/plugins"
+  [ -d "$pdir" ] || return 0
+  if [ -z "$(find "$pdir" \( ! -user www-data -o ! -perm -u+r \) -print -quit 2>/dev/null)" ]; then
+    return 0
+  fi
+  chown -R www-data:www-data "$pdir" 2>/dev/null || true
+  find "$pdir" -type d -exec chmod 755 {} + 2>/dev/null || true
+  find "$pdir" -type f -exec chmod 644 {} + 2>/dev/null || true
+  log "Fixed plugin file ownership/permissions (files are readable by www-data again)."
+  return 0
 }
 
 plugins_ensure_installed() {

@@ -15,6 +15,7 @@ Usage: python3 modpack-cf-fallback.py <plugin-root-dir>
 """
 import os
 import re
+import stat
 import sys
 import tempfile
 
@@ -33,10 +34,25 @@ def read(path):
 
 
 def write_atomic(path, data):
+    # mkstemp creates the temp file as 0600 root - replacing the original with
+    # it locked php-fpm (www-data) out of the plugin ("Permission denied").
+    # Copy the original mode/owner onto the replacement before swapping it in.
+    st = None
+    try:
+        st = os.stat(path)
+    except OSError:
+        pass
     fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".cfpatch-")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write(data)
+        if st is not None:
+            os.chmod(tmp, stat.S_IMODE(st.st_mode))
+            if hasattr(os, "chown"):
+                try:
+                    os.chown(tmp, st.st_uid, st.st_gid)
+                except OSError:
+                    pass
         os.replace(tmp, path)
     except OSError:
         try:
