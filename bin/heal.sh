@@ -131,17 +131,19 @@ fi
 if [ -f "$PELICAN_ETC/config.yml" ]; then
   # Retry before restarting: wings can be busy with a long docker operation
   # (container create/start of a modpack) and a single slow probe used to
-  # restart it mid-boot, killing the server start.
+  # restart it mid-boot, killing the server start. Any HTTP answer (401/403
+  # included - newer wings requires auth on /api/system) means the daemon is
+  # alive; only connection failures/timeouts mean it is down.
   wings_ok=0
   for _i in 1 2 3; do
-    if curl -fsS -m 10 -o /dev/null http://127.0.0.1:8080/api/system 2>/dev/null; then
-      wings_ok=1
-      break
-    fi
+    wings_code=$(curl -sS -o /dev/null -w '%{http_code}' -m 10 http://127.0.0.1:8080/api/system 2>/dev/null || true)
+    case "$wings_code" in
+      2*|3*|4*) wings_ok=1; break ;;
+    esac
     sleep 5
   done
   if [ "$wings_ok" != "1" ]; then
-    hlog "wings API unreachable or erroring (3 probes) - restarting wings"
+    hlog "wings API unreachable (3 probes, last code: ${wings_code:-none}) - restarting wings"
     restart_service wings
   fi
 fi

@@ -1183,6 +1183,13 @@ perf_voicechat_setup() {
     return 0
   fi
   chown -R pelican:pelican "$(dirname "$cfg")" 2>/dev/null || true
+  # Modpacks ship default configs that get copied over config/ on server start -
+  # keep the port there too or the allocation stops matching after a restart.
+  local pack_cfg="$dir/defaultconfigs/voicechat/voicechat-server.properties"
+  if [ -f "$pack_cfg" ]; then
+    perf_props_set_port "$pack_cfg" "$port" || true
+    chown pelican:pelican "$pack_cfg" 2>/dev/null || true
+  fi
 
   if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q '^Status: active'; then
     if ! ufw status 2>/dev/null | grep -qE "(^|[^0-9])${port}/udp"; then
