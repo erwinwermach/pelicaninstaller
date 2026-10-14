@@ -178,6 +178,48 @@
             </x-filament::section>
         @endif
 
+        @php($vc = $d['rec']['voicechat'] ?? null)
+        @if(in_array($d['rec']['profile'] ?? '', ['mc-fabric', 'mc-forge', 'mc-neoforge', 'mc-paper'], true))
+            <x-filament::section>
+                <x-slot name="heading">Voice chat (Simple Voice Chat)</x-slot>
+                <x-slot name="description">
+                    Proximity voice chat for Minecraft. Quick setup installs the mod/plugin matching this
+                    server's loader and Minecraft version, allocates a free UDP port, writes
+                    voicechat-server.properties and opens the firewall. Every player needs the client mod.
+                </x-slot>
+                <div class="flex flex-wrap items-center gap-2">
+                    @if(!empty($vc['installed']))
+                        <x-filament::badge color="success">installed</x-filament::badge>
+                    @else
+                        <x-filament::badge color="gray">not installed</x-filament::badge>
+                    @endif
+                    @if(!empty($vc['port']))
+                        <x-filament::badge color="primary">voice UDP port: {{ $vc['port'] }}</x-filament::badge>
+                    @endif
+                    @if(($d['result']['action'] ?? '') === 'voicechat_setup' && ($d['result']['ok'] ?? false))
+                        <x-filament::badge color="success">{{ $d['result']['file'] }} ({{ $d['result']['version'] }})</x-filament::badge>
+                    @endif
+                </div>
+                @if(($d['result']['action'] ?? '') === 'voicechat_setup' && !empty($d['result']['note']))
+                    <p class="mt-2 text-sm text-gray-500 dark:text-gray-400">{{ $d['result']['note'] }}</p>
+                @elseif(($d['result']['action'] ?? '') === 'voicechat_setup' && !empty($d['result']['error']))
+                    <p class="mt-2 text-sm text-danger-600 dark:text-danger-400">{{ $d['result']['error'] }}</p>
+                @endif
+                <div class="mt-3 flex flex-wrap items-center gap-3">
+                    <x-filament::button color="primary" size="sm" wire:click="voiceChatSetup()"
+                        wire:confirm="Install Simple Voice Chat, allocate a UDP port, write the config and open the firewall? Restart the server afterwards; players need the client mod.">
+                        Quick setup
+                    </x-filament::button>
+                    @if(!empty($vc['installed']))
+                        <x-filament::button color="danger" size="sm" wire:click="voiceChatDisable()"
+                            wire:confirm="Remove the voice chat mod added by this plugin? The extra UDP allocation stays.">
+                            Remove
+                        </x-filament::button>
+                    @endif
+                </div>
+            </x-filament::section>
+        @endif
+
         @if(!empty($d['result']))
             <x-filament::section>
                 <x-slot name="heading">Last request result</x-slot>

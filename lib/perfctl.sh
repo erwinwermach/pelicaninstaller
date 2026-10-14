@@ -6,6 +6,10 @@ PERF_VOLUMES="${PERF_VOLUMES:-/var/lib/pelican/volumes}"
 PERF_BACKUP_DIR="${PERF_BACKUP_DIR:-$PANEL_STORAGE/perf-backups}"
 PERF_INFRA_RESERVE_LOW_MB="${PERF_INFRA_RESERVE_LOW_MB:-2048}"
 PERF_INFRA_RESERVE_HIGH_MB="${PERF_INFRA_RESERVE_HIGH_MB:-3072}"
+# UDP ports the voice-chat quick setup allocates from (first free port wins).
+VOICE_PORTS="${VOICE_PORTS:-24454-24463}"
+PERF_VOICECHAT_PROJECT="${PERF_VOICECHAT_PROJECT:-simple-voice-chat}"
+PERF_VOICECHAT_UA="${PERF_VOICECHAT_UA:-pelicaninstaller-perfctl/1.0 (github.com/erwinwermach/pelicaninstaller)}"
 
 perf_profiles_list() {
   cat <<'EOF'
@@ -32,6 +36,7 @@ perf_detect_profile() {
     *paper*|*purpur*|*pufferfish*|*leaves*) echo mc-paper; return ;;
     *velocity*|*waterfall*|*bungee*) echo proxy-java; return ;;
     *neoforge*) echo mc-neoforge; return ;;
+    *quilt*) echo mc-fabric; return ;;
     *fabric*) echo mc-fabric; return ;;
     *forge*) echo mc-forge; return ;;
   esac
@@ -847,6 +852,7 @@ perf_scan() {
     local profile rec reason ooms mem_json heap recmem unb mnote
     local eff rss restarts keepup props jvms yamlc pumpkin slow
     local boot_json boot_mode boot_flags upd mods advice
+    local vc_installed vc_port vc_json
     profile=$(perf_detect_profile "$egg_name" "$images" "$startup")
     eff=$(perf_docker_limit_mb "$uuid")
     rss=$(perf_docker_rss_mb "$uuid")
@@ -885,6 +891,15 @@ perf_scan() {
       case "$mods" in \{*) ;; *) mods='{}' ;; esac
     fi
     advice=$(perf_platform_advice "$profile" "$PERF_VOLUMES/$uuid" "$egg_name")
+    vc_installed=false
+    if compgen -G "$PERF_VOLUMES/$uuid/mods/voicechat-*" >/dev/null 2>&1 \
+       || compgen -G "$PERF_VOLUMES/$uuid/plugins/voicechat-*" >/dev/null 2>&1; then
+      vc_installed=true
+    fi
+    vc_port=$(sed -n 's/^port=//p' "$PERF_VOLUMES/$uuid/config/voicechat/voicechat-server.properties" 2>/dev/null | head -1)
+    [ -n "$vc_port" ] || vc_port=$(sed -n 's/^port=//p' "$PERF_VOLUMES/$uuid/plugins/voicechat/voicechat-server.properties" 2>/dev/null | head -1)
+    vc_json=$(jq -nc --argjson i "$vc_installed" --arg p "$vc_port" \
+      '{installed:$i, port:(if $p == "" then null else ($p|tonumber? // null) end)}' 2>/dev/null) || vc_json='{"installed":false,"port":null}'
     slow=false
     if [ -n "$ping_ms" ] && [ "$ping_ms" -ge 80 ] 2>/dev/null; then slow=true; fi
     if [ "$avail_ram" -lt 1024 ]; then slow=true; fi
@@ -899,6 +914,7 @@ perf_scan() {
       --argjson rst "$restarts" --argjson kpu "$keepup" \
       --argjson pr "$props" --argjson jv "$jvms" --argjson ym "$yamlc" --argjson pkt "$pumpkin" \
       --argjson bc "$boot_json" --argjson mo "$mods" --argjson pa "$advice" \
+      --argjson vc "$vc_json" \
       --argjson ping "${ping_ms:-null}" --argjson slow "$slow" \
       '{uuid:$id, name:$n, profile:$p, current_startup:$cur,
         recommended_startup:$rec, reason:$r, memory_mb:$m, recent_ooms:$o,
@@ -906,7 +922,7 @@ perf_scan() {
         recommended_memory_mb:$recmem, recommended_heap_mb:$heap,
         unbounded:$unb, mem_note:$mn,
         restart_count:$rst, cant_keep_up_count:$kpu,
-        boot_cache:$bc, platform_advice:$pa,
+        boot_cache:$bc, platform_advice:$pa, voicechat:$vc,
         file_recs:{"server.properties":$pr, user_jvm_args:$jv, yaml_configs:$ym, "pumpkin.toml":$pkt, optimizer_mods:$mo},
         network:{ping_ms:(if $ping == null then null else $ping end), slow_link:$slow}}' >> "$lines" 2>/dev/null || true
   done < "$rows"
@@ -960,6 +976,247 @@ perf_write_result() {
   mv -f "$tmp" "$PERF_REQUEST_DIR/perf-$uuid.result" 2>/dev/null || rm -f "$tmp"
 }
 
+# ------------------------------------------------------------------
+# Simple Voice Chat quick setup
+# ------------------------------------------------------------------
+
+perf_server_field() {
+  # $2 = env variable name (MC_VERSION/SERVER_JARFILE/LOADER_VERSION) or a
+  # servers column name.
+  local uuid=$1 col=$2
+  case "$col" in
+    MC_VERSION|SERVER_JARFILE|LOADER_VERSION)
+      mysql -N -B -e "SELECT sv.variable_value FROM pelican.egg_variables ev JOIN pelican.server_variables sv ON sv.variable_id=ev.id JOIN pelican.servers s ON s.id=sv.server_id WHERE s.uuid='$uuid' AND ev.env_variable='$col';" 2>/dev/null | head -1
+      ;;
+    *)
+      mysql -N -B -e "SELECT $col FROM pelican.servers s WHERE s.uuid='$uuid';" 2>/dev/null | head -1
+      ;;
+  esac
+}
+
+perf_voice_port_range() {
+  local spec="$VOICE_PORTS" lo hi
+  case "$spec" in
+    *-*) lo=${spec%-*}; hi=${spec#*-} ;;
+    *) lo=$spec; hi=$spec ;;
+  esac
+  case "$lo" in ''|*[!0-9]*) lo=24454 ;; esac
+  case "$hi" in ''|*[!0-9]*) hi=$lo ;; esac
+  [ "$hi" -ge "$lo" ] || hi=$lo
+  echo "$lo $hi"
+}
+
+perf_voice_port_allocate() {
+  # Allocates (or reuses) a UDP port for the server from VOICE_PORTS and
+  # assigns it as an extra allocation. Echoes the port, empty on failure.
+  local uuid=$1 sid node_id ip lo hi port row
+  sid=$(mysql -N -B -e "SELECT id FROM pelican.servers WHERE uuid='$uuid';" 2>/dev/null)
+  case "$sid" in ''|*[!0-9]*) return 1 ;; esac
+  read -r lo hi <<EOF
+$(perf_voice_port_range)
+EOF
+  port=$(mysql -N -B -e "SELECT port FROM pelican.allocations WHERE server_id=$sid AND port BETWEEN $lo AND $hi ORDER BY port LIMIT 1;" 2>/dev/null)
+  if [ -n "$port" ]; then
+    echo "$port"
+    return 0
+  fi
+  node_id=$(mysql -N -B -e "SELECT node_id FROM pelican.servers WHERE uuid='$uuid';" 2>/dev/null)
+  case "$node_id" in ''|*[!0-9]*) return 1 ;; esac
+  ip=$(mysql -N -B -e "SELECT ip FROM pelican.allocations WHERE node_id=$node_id LIMIT 1;" 2>/dev/null)
+  ip=${ip:-0.0.0.0}
+  port=$lo
+  while [ "$port" -le "$hi" ]; do
+    row=$(mysql -N -B -e "SELECT COALESCE(server_id,0) FROM pelican.allocations WHERE node_id=$node_id AND ip='$ip' AND port=$port LIMIT 1;" 2>/dev/null)
+    if [ -z "$row" ]; then
+      if mysql -e "INSERT INTO pelican.allocations (node_id, ip, port, server_id, show_port, is_locked, created_at, updated_at) VALUES ($node_id, '$ip', $port, $sid, 1, 0, NOW(), NOW());" 2>>"$INSTALL_LOG"; then
+        echo "$port"
+        return 0
+      fi
+    elif [ "$row" = "0" ]; then
+      if mysql -e "UPDATE pelican.allocations SET server_id=$sid, updated_at=NOW() WHERE node_id=$node_id AND ip='$ip' AND port=$port;" 2>>"$INSTALL_LOG"; then
+        echo "$port"
+        return 0
+      fi
+    elif [ "$row" = "$sid" ]; then
+      echo "$port"
+      return 0
+    fi
+    port=$(( port + 1 ))
+  done
+  return 1
+}
+
+perf_props_set_port() {
+  # Merge/replace the `port=` key of a properties file (creates it with the
+  # documented minimal keys when missing).
+  local file=$1 port=$2 tmp
+  tmp=$(mktemp) || return 1
+  if [ -f "$file" ]; then
+    awk -v p="$port" '
+      /^[[:space:]]*port[[:space:]]*=/ { print "port=" p; found=1; next }
+      { print }
+      END { if (!found) print "port=" p }
+    ' "$file" > "$tmp" || { rm -f "$tmp"; return 1; }
+  else
+    {
+      echo "# Managed by the Pelican installer (Simple Voice Chat quick setup)."
+      echo "# Clients need the matching Simple Voice Chat client mod."
+      echo "port=$port"
+      echo "bind_address="
+    } > "$tmp" || { rm -f "$tmp"; return 1; }
+  fi
+  chmod 644 "$tmp" 2>/dev/null || true
+  mv -f "$tmp" "$file"
+}
+
+perf_voice_loader_map() {
+  # profile + raw haystack -> "modrinth-loader|mod|plugin"
+  local profile=$1 hay=$2
+  case "$hay" in
+    *quilt*) echo "quilt|mod"; return 0 ;;
+  esac
+  case "$profile" in
+    mc-fabric) echo "fabric|mod" ;;
+    mc-forge) echo "forge|mod" ;;
+    mc-neoforge) echo "neoforge|mod" ;;
+    mc-paper) echo "paper|plugin" ;;
+    *) echo "" ;;
+  esac
+}
+
+perf_voice_modrinth_pick() {
+  # loader + mc version -> "filename|url|version_number" (prefers releases)
+  local loader=$1 mc=$2 resp
+  resp=$(curl -fsSL -m 25 -H "User-Agent: $PERF_VOICECHAT_UA" --get \
+    --data-urlencode "loaders=[\"$loader\"]" \
+    --data-urlencode "game_versions=[\"$mc\"]" \
+    "https://api.modrinth.com/v2/project/$PERF_VOICECHAT_PROJECT/version" 2>/dev/null) || return 1
+  printf '%s' "$resp" | jq -r '
+    ([.[] | select(.version_type == "release")][0] // .[0]) as $v
+    | if $v then "\($v.files[0].filename)|\($v.files[0].url)|\($v.version_number)" else empty end
+  ' 2>/dev/null
+}
+
+perf_resolve_mc_latest() {
+  if command -v resolve_mc_latest >/dev/null 2>&1; then
+    resolve_mc_latest
+    return 0
+  fi
+  curl -fsSL -m 30 "https://launchermeta.mojang.com/mc/game/version_manifest_v2.json" 2>/dev/null \
+    | python3 -c 'import sys, json; print(json.load(sys.stdin)["latest"]["release"])' 2>/dev/null || true
+}
+
+perf_voicechat_setup() {
+  local uuid=$1
+  local dir="$PERF_VOLUMES/$uuid"
+  if [ ! -d "$dir" ]; then
+    perf_write_result "$uuid" '{"ok": false, "error": "server volume not found"}'
+    return 0
+  fi
+
+  local egg_name images startup profile hay map loader kind mc
+  egg_name=$(mysql -N -B -e "SELECT COALESCE(e.name,'') FROM pelican.servers s LEFT JOIN pelican.eggs e ON e.id=s.egg_id WHERE s.uuid='$uuid';" 2>/dev/null)
+  images=$(mysql -N -B -e "SELECT COALESCE(e.docker_images,'') FROM pelican.servers s LEFT JOIN pelican.eggs e ON e.id=s.egg_id WHERE s.uuid='$uuid';" 2>/dev/null)
+  startup=$(perf_server_field "$uuid" startup)
+  hay=$(printf '%s\n%s\n%s' "$egg_name" "$images" "$startup" | tr '[:upper:]' '[:lower:]')
+  profile=$(perf_detect_profile "$egg_name" "$images" "$startup")
+  map=$(perf_voice_loader_map "$profile" "$hay")
+  loader=${map%%|*}
+  kind=${map#*|}
+  if [ -z "$map" ] || [ -z "$loader" ] || [ "$loader" = "$map" ]; then
+    perf_write_result "$uuid" "$(jq -nc --arg p "$profile" '{ok: false, action: "voicechat_setup", error: ("Simple Voice Chat quick setup supports Fabric, Forge, NeoForge, Quilt and Paper/Purpur servers - detected: " + $p)}')"
+    return 0
+  fi
+
+  mc=$(perf_server_field "$uuid" MC_VERSION)
+  case "$mc" in
+    latest|LATEST|"") mc=$(perf_resolve_mc_latest) ;;
+  esac
+  if [ -z "$mc" ]; then
+    perf_write_result "$uuid" '{"ok": false, "action": "voicechat_setup", "error": "could not determine the Minecraft version"}'
+    return 0
+  fi
+
+  local picked fname url ver rest target
+  picked=$(perf_voice_modrinth_pick "$loader" "$mc") || picked=""
+  if [ -z "$picked" ]; then
+    perf_write_result "$uuid" "$(jq -nc --arg l "$loader" --arg m "$mc" '{ok: false, action: "voicechat_setup", error: ("no Simple Voice Chat build for " + $l + " / " + $m + " on Modrinth")}')"
+    return 0
+  fi
+  fname=${picked%%|*}
+  rest=${picked#*|}
+  url=${rest%%|*}
+  ver=${rest#*|}
+
+  case "$kind" in
+    plugin) target="$dir/plugins/$fname" ;;
+    *) target="$dir/mods/$fname" ;;
+  esac
+  if [ ! -f "$target" ]; then
+    mkdir -p "$(dirname "$target")"
+    if ! run_with_heartbeat "voice chat download ($loader $mc)" 300 \
+         curl -fsSL -m 240 -o "$target.tmp" "$url" \
+       || [ "$(stat -c %s "$target.tmp" 2>/dev/null || echo 0)" -lt 50000 ]; then
+      rm -f "$target.tmp"
+      perf_write_result "$uuid" '{"ok": false, "action": "voicechat_setup", "error": "voice chat download failed or was truncated"}'
+      return 0
+    fi
+    mv -f "$target.tmp" "$target"
+  fi
+  chown pelican:pelican "$target" 2>/dev/null || true
+
+  local port
+  port=$(perf_voice_port_allocate "$uuid" || true)
+  if [ -z "$port" ]; then
+    perf_write_result "$uuid" "$(jq -nc --arg r "$VOICE_PORTS" '{ok: false, action: "voicechat_setup", error: ("no free UDP port in VOICE_PORTS (" + $r + ")")}')"
+    return 0
+  fi
+
+  local cfg
+  case "$kind" in
+    plugin) cfg="$dir/plugins/voicechat/voicechat-server.properties" ;;
+    *) cfg="$dir/config/voicechat/voicechat-server.properties" ;;
+  esac
+  mkdir -p "$(dirname "$cfg")"
+  if ! perf_props_set_port "$cfg" "$port"; then
+    perf_write_result "$uuid" '{"ok": false, "action": "voicechat_setup", "error": "could not write voicechat-server.properties"}'
+    return 0
+  fi
+  chown -R pelican:pelican "$(dirname "$cfg")" 2>/dev/null || true
+
+  if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q '^Status: active'; then
+    if ! ufw status 2>/dev/null | grep -qE "(^|[^0-9])${port}/udp"; then
+      ufw allow "$port/udp" >/dev/null 2>&1 || true
+    fi
+  fi
+
+  mkdir -p "$dir/.perf"
+  jq -nc --arg f "$target" --argjson p "$port" --arg v "$ver" --arg l "$loader" --arg m "$mc" \
+    '{file:$f, port:$p, version:$v, loader:$l, mc:$m}' > "$dir/.perf/voicechat.json" 2>/dev/null || true
+  chown -R pelican:pelican "$dir/.perf" 2>/dev/null || true
+
+  local note
+  note="Restart the server to load it. Every player needs the Simple Voice Chat client mod (modrinth.com/plugin/simple-voice-chat). Direct players connect over UDP $port. Through playit: add a custom UDP tunnel (premium) for port $port and set voice_host in voicechat-server.properties if the public port differs."
+  perf_write_result "$uuid" "$(jq -nc --arg f "$fname" --argjson p "$port" --arg v "$ver" --arg k "$kind" --arg n "$note" \
+    '{ok: true, action: "voicechat_setup", file: $f, port: $p, version: $v, kind: $k, note: $n}')"
+  return 0
+}
+
+perf_voicechat_disable() {
+  local uuid=$1
+  local dir="$PERF_VOLUMES/$uuid" manifest="$PERF_VOLUMES/$uuid/.perf/voicechat.json"
+  local file
+  file=$(jq -r '.file // empty' "$manifest" 2>/dev/null || true)
+  rm -f "$manifest" 2>/dev/null || true
+  if [ -n "$file" ] && [ -f "$file" ]; then
+    rm -f "$file"
+    perf_write_result "$uuid" '{"ok": true, "action": "voicechat_disable", "note": "Voice chat mod removed. The extra UDP allocation and firewall rule stay (harmless) - remove them in the panel if you want."}'
+  else
+    perf_write_result "$uuid" '{"ok": true, "action": "voicechat_disable", "note": "Nothing to remove - the mod was not added by this plugin."}'
+  fi
+  return 0
+}
+
 perf_apply_request() {
   local uuid=$1 raw op profile
   case "$uuid" in
@@ -988,6 +1245,14 @@ perf_apply_request() {
   case "$op" in
     boot_cache)
       perf_boot_request "$uuid" "$raw"
+      return 0
+      ;;
+    voicechat_setup)
+      perf_voicechat_setup "$uuid"
+      return 0
+      ;;
+    voicechat_disable)
+      perf_voicechat_disable "$uuid"
       return 0
       ;;
     mods_apply|mods_revert)

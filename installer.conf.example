@@ -124,6 +124,11 @@ INSTALL_SELF_PLUGINS=yes
 #   none     = skip egg imports
 EXTRA_EGGS=games,bots,minecraft
 
+# UDP ports the one-click Simple Voice Chat setup (Performance page) allocates
+# from - the first free port is assigned to the server as an extra allocation
+# and opened in the firewall. Default: 24454-24463.
+VOICE_PORTS=24454-24463
+
 # Server-side optimizer mods (Performance plugin): matches ModernFix, FerriteCore,
 # Lithium/Canary, Krypton, C2ME, ... to each modded server's exact loader and
 # Minecraft version (via Modrinth). Nothing is downloaded until an admin clicks

@@ -188,6 +188,15 @@ sysctl/BBR, zram for low-memory hosts, NVMe/IO scheduler rules.
   Java 19+ servers; Java 25+ servers can opt into an AOT class cache that is
   trained on one restart and reused afterwards (auto-invalidated when mods or
   the server jar change).
+- **Voice chat (one-click)**: the server's Performance page has a *Voice chat
+  (Simple Voice Chat)* card. Quick setup installs the mod/plugin matching the
+  server's loader and Minecraft version (Fabric/Forge/NeoForge/Quilt/Paper),
+  allocates a free UDP port from `VOICE_PORTS` (default `24454-24463`), writes
+  `voicechat-server.properties`, opens the firewall and shows the allocated
+  port. Every player needs the client mod (modrinth.com/plugin/simple-voice-chat);
+  direct players connect over UDP `<port>`. Through playit, add a custom UDP
+  tunnel (premium) for that port and set `voice_host` if the public port
+  differs.
 
 ## Automatic updates & self-healing
 

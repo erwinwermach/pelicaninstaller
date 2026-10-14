@@ -179,4 +179,24 @@ class Performance extends Page
             ->success()
             ->send();
     }
+
+    public function voiceChatSetup(): void
+    {
+        $this->request(['op' => 'voicechat_setup']);
+        Notification::make()
+            ->title('Voice chat setup scheduled')
+            ->body('The watchdog installs Simple Voice Chat matching this server\'s loader and Minecraft version, allocates a free UDP port, writes voicechat-server.properties and opens the firewall - within 5 minutes. Restart the server afterwards; every player needs the client mod.')
+            ->success()
+            ->send();
+    }
+
+    public function voiceChatDisable(): void
+    {
+        $this->request(['op' => 'voicechat_disable']);
+        Notification::make()
+            ->title('Voice chat removal scheduled')
+            ->body('The voice chat mod added by this plugin will be removed within 5 minutes. The extra UDP allocation stays (remove it in the panel if you want).')
+            ->success()
+            ->send();
+    }
 }
