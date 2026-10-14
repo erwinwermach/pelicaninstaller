@@ -1106,6 +1106,25 @@ perf_resolve_mc_latest() {
     | python3 -c 'import sys, json; print(json.load(sys.stdin)["latest"]["release"])' 2>/dev/null || true
 }
 
+perf_voicechat_find_existing() {
+  # args: volume dir [prefer mod|plugin]
+  # echoes "kind|path" when a voice chat jar is already present (modpacks
+  # often bundle it - in that case setup must not download a second copy).
+  local dir=$1 prefer=${2:-mod} f
+  if [ "$prefer" = "plugin" ]; then
+    f=$(find "$dir/plugins" -maxdepth 1 -iname 'voicechat*.jar' 2>/dev/null | head -1)
+    [ -n "$f" ] && { echo "plugin|$f"; return 0; }
+    f=$(find "$dir/mods" -maxdepth 1 -iname 'voicechat*.jar' 2>/dev/null | head -1)
+    [ -n "$f" ] && { echo "mod|$f"; return 0; }
+  else
+    f=$(find "$dir/mods" -maxdepth 1 -iname 'voicechat*.jar' 2>/dev/null | head -1)
+    [ -n "$f" ] && { echo "mod|$f"; return 0; }
+    f=$(find "$dir/plugins" -maxdepth 1 -iname 'voicechat*.jar' 2>/dev/null | head -1)
+    [ -n "$f" ] && { echo "plugin|$f"; return 0; }
+  fi
+  return 1
+}
+
 perf_voicechat_setup() {
   local uuid=$1
   local dir="$PERF_VOLUMES/$uuid"
@@ -1123,36 +1142,53 @@ perf_voicechat_setup() {
   map=$(perf_voice_loader_map "$profile" "$hay")
   loader=${map%%|*}
   kind=${map#*|}
-  if [ -z "$map" ] || [ -z "$loader" ] || [ "$loader" = "$map" ]; then
-    perf_write_result "$uuid" "$(jq -nc --arg p "$profile" '{ok: false, action: "voicechat_setup", error: ("Simple Voice Chat quick setup supports Fabric, Forge, NeoForge, Quilt and Paper/Purpur servers - detected: " + $p)}')"
-    return 0
+
+  # Bundled by the modpack? Then this is a setup-only run: allocate the port,
+  # write the config and open the firewall - never add a second copy.
+  local existing ex_kind ex_file fname url ver rest target source
+  local prefer=mod
+  [ "$kind" = "plugin" ] && prefer=plugin
+  existing=$(perf_voicechat_find_existing "$dir" "$prefer" || true)
+  if [ -n "$existing" ]; then
+    kind=${existing%%|*}
+    target=${existing#*|}
+    fname=$(basename "$target")
+    ver="existing"
+    source="existing"
+  else
+    if [ -z "$map" ] || [ -z "$loader" ] || [ "$loader" = "$map" ]; then
+      perf_write_result "$uuid" "$(jq -nc --arg p "$profile" '{ok: false, action: "voicechat_setup", error: ("Simple Voice Chat quick setup supports Fabric, Forge, NeoForge, Quilt and Paper/Purpur servers - detected: " + $p)}')"
+      return 0
+    fi
+
+    mc=$(perf_server_field "$uuid" MC_VERSION)
+    case "$mc" in
+      latest|LATEST|"") mc=$(perf_resolve_mc_latest) ;;
+    esac
+    if [ -z "$mc" ]; then
+      perf_write_result "$uuid" '{"ok": false, "action": "voicechat_setup", "error": "could not determine the Minecraft version"}'
+      return 0
+    fi
+
+    local picked
+    picked=$(perf_voice_modrinth_pick "$loader" "$mc") || picked=""
+    if [ -z "$picked" ]; then
+      perf_write_result "$uuid" "$(jq -nc --arg l "$loader" --arg m "$mc" '{ok: false, action: "voicechat_setup", error: ("no Simple Voice Chat build for " + $l + " / " + $m + " on Modrinth")}')"
+      return 0
+    fi
+    fname=${picked%%|*}
+    rest=${picked#*|}
+    url=${rest%%|*}
+    ver=${rest#*|}
+    source="modrinth"
+
+    case "$kind" in
+      plugin) target="$dir/plugins/$fname" ;;
+      *) target="$dir/mods/$fname" ;;
+    esac
   fi
 
-  mc=$(perf_server_field "$uuid" MC_VERSION)
-  case "$mc" in
-    latest|LATEST|"") mc=$(perf_resolve_mc_latest) ;;
-  esac
-  if [ -z "$mc" ]; then
-    perf_write_result "$uuid" '{"ok": false, "action": "voicechat_setup", "error": "could not determine the Minecraft version"}'
-    return 0
-  fi
-
-  local picked fname url ver rest target
-  picked=$(perf_voice_modrinth_pick "$loader" "$mc") || picked=""
-  if [ -z "$picked" ]; then
-    perf_write_result "$uuid" "$(jq -nc --arg l "$loader" --arg m "$mc" '{ok: false, action: "voicechat_setup", error: ("no Simple Voice Chat build for " + $l + " / " + $m + " on Modrinth")}')"
-    return 0
-  fi
-  fname=${picked%%|*}
-  rest=${picked#*|}
-  url=${rest%%|*}
-  ver=${rest#*|}
-
-  case "$kind" in
-    plugin) target="$dir/plugins/$fname" ;;
-    *) target="$dir/mods/$fname" ;;
-  esac
-  if [ ! -f "$target" ]; then
+  if [ "$source" = "modrinth" ] && [ ! -f "$target" ]; then
     mkdir -p "$(dirname "$target")"
     if ! run_with_heartbeat "voice chat download ($loader $mc)" 300 \
          curl -fsSL -m 240 -o "$target.tmp" "$url" \
@@ -1198,14 +1234,18 @@ perf_voicechat_setup() {
   fi
 
   mkdir -p "$dir/.perf"
-  jq -nc --arg f "$target" --argjson p "$port" --arg v "$ver" --arg l "$loader" --arg m "$mc" \
+  jq -nc --arg f "$target" --argjson p "$port" --arg v "$ver" --arg l "$loader" --arg m "${mc:-}" \
     '{file:$f, port:$p, version:$v, loader:$l, mc:$m}' > "$dir/.perf/voicechat.json" 2>/dev/null || true
   chown -R pelican:pelican "$dir/.perf" 2>/dev/null || true
 
   local note
-  note="Restart the server to load it. Every player needs the Simple Voice Chat client mod (modrinth.com/plugin/simple-voice-chat). Direct players connect over UDP $port. Through playit: add a custom UDP tunnel (premium) for port $port and set voice_host in voicechat-server.properties if the public port differs."
-  perf_write_result "$uuid" "$(jq -nc --arg f "$fname" --argjson p "$port" --arg v "$ver" --arg k "$kind" --arg n "$note" \
-    '{ok: true, action: "voicechat_setup", file: $f, port: $p, version: $v, kind: $k, note: $n}')"
+  if [ "$source" = "existing" ]; then
+    note="Simple Voice Chat is already bundled ($fname) - no download needed. Allocated UDP $port, wrote the server config and opened the firewall. Restart the server to apply. Every player needs the matching client mod."
+  else
+    note="Installed $fname from Modrinth. Restart the server to load it. Every player needs the Simple Voice Chat client mod (modrinth.com/plugin/simple-voice-chat). Direct players connect over UDP $port. Through playit: add a custom UDP tunnel (premium) for port $port and set voice_host in voicechat-server.properties if the public port differs."
+  fi
+  perf_write_result "$uuid" "$(jq -nc --arg f "$fname" --argjson p "$port" --arg v "$ver" --arg k "$kind" --arg s "$source" --arg n "$note" \
+    '{ok: true, action: "voicechat_setup", file: $f, port: $p, version: $v, kind: $k, source: $s, note: $n}')"
   return 0
 }
 

@@ -185,7 +185,7 @@ class Performance extends Page
         $this->request(['op' => 'voicechat_setup']);
         Notification::make()
             ->title('Voice chat setup scheduled')
-            ->body('The watchdog installs Simple Voice Chat matching this server\'s loader and Minecraft version, allocates a free UDP port, writes voicechat-server.properties and opens the firewall - within 5 minutes. Restart the server afterwards; every player needs the client mod.')
+            ->body('The watchdog allocates a free UDP port, writes voicechat-server.properties and opens the firewall. If the pack already bundles Simple Voice Chat it is only configured (no duplicate mod); otherwise the matching mod/plugin is installed from Modrinth. Applied within 5 minutes; restart the server afterwards. Every player needs the client mod.')
             ->success()
             ->send();
     }

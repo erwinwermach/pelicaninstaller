@@ -39,9 +39,13 @@ for plugin_dir in "$SCRIPT_DIR"/plugins/*/; do
     feed=$(printf '%s' "$feed" | python3 -c '
 import json, sys
 feed = json.load(sys.stdin)
+# The panel resolves $data[<plugin-id>] first, then looks for the current
+# panel version or "*" inside it - each entry must be {"*": {version, ...}}.
 print(json.dumps({**feed, sys.argv[1]: {
-    "version": sys.argv[2],
-    "download_url": sys.argv[3] + "/" + sys.argv[1] + ".zip",
+    "*": {
+        "version": sys.argv[2],
+        "download_url": sys.argv[3] + "/" + sys.argv[1] + ".zip",
+    },
 }}, indent=2))
 ' "$name" "$version" "$RELEASE_BASE")
   fi

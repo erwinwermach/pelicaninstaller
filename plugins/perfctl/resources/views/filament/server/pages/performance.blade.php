@@ -183,9 +183,11 @@
             <x-filament::section>
                 <x-slot name="heading">Voice chat (Simple Voice Chat)</x-slot>
                 <x-slot name="description">
-                    Proximity voice chat for Minecraft. Quick setup installs the mod/plugin matching this
-                    server's loader and Minecraft version, allocates a free UDP port, writes
-                    voicechat-server.properties and opens the firewall. Every player needs the client mod.
+                    Proximity voice chat for Minecraft. Quick setup allocates a free UDP port, writes
+                    voicechat-server.properties and opens the firewall. If the pack already bundles
+                    Simple Voice Chat it is only configured - no duplicate mod is added; otherwise the
+                    matching mod/plugin for this server's loader and Minecraft version is installed.
+                    Every player needs the client mod.
                 </x-slot>
                 <div class="flex flex-wrap items-center gap-2">
                     @if(!empty($vc['installed']))
@@ -197,7 +199,12 @@
                         <x-filament::badge color="primary">voice UDP port: {{ $vc['port'] }}</x-filament::badge>
                     @endif
                     @if(($d['result']['action'] ?? '') === 'voicechat_setup' && ($d['result']['ok'] ?? false))
-                        <x-filament::badge color="success">{{ $d['result']['file'] }} ({{ $d['result']['version'] }})</x-filament::badge>
+                        <x-filament::badge color="success">{{ $d['result']['file'] }}</x-filament::badge>
+                        @if(($d['result']['source'] ?? '') === 'existing')
+                            <x-filament::badge color="gray">bundled by the pack</x-filament::badge>
+                        @elseif(!empty($d['result']['version']))
+                            <x-filament::badge color="gray">{{ $d['result']['version'] }} (Modrinth)</x-filament::badge>
+                        @endif
                     @endif
                 </div>
                 @if(($d['result']['action'] ?? '') === 'voicechat_setup' && !empty($d['result']['note']))
