@@ -93,7 +93,7 @@ routing_fallback_json() {
   lan=$(routing_lan_ip)
   [ -n "$lan" ] || lan=127.0.0.1
   pub=""
-  wan_ip_is_usable && pub=$(public_ip)
+  wan_direct_usable && pub=$(public_ip)
   local port out="{" first=1
   for port in $(routing_ports); do
     [ $first -eq 1 ] || out="$out,"
@@ -404,13 +404,17 @@ playit_create_tunnels() {
 
 playit_addresses_json() {
   playit_api POST /v1/agents/rundata '{}' || { echo '{}'; return 0; }
-  echo "$PLAYIT_RESP" | jq '
+  local note="playit tunnel address"
+  if ! wan_direct_usable; then
+    note="share this address - the direct public address cannot receive inbound traffic here (CGNAT/double NAT)"
+  fi
+  echo "$PLAYIT_RESP" | jq --arg n "$note" '
     [.data.tunnels[]?
      | select(.port_type == "tcp" or .port_type == "udp")
      | .agent_config.fields as $f
      | ($f[]? | select(.name == "local_port") | (.value | tostring)) as $port
      | select($port != null)
-     | {($port): [{"backend": "playit", "address": .display_address}]}]
+     | {($port): [{"backend": "playit", "address": .display_address, "note": $n}]}]
     | add // {}' 2>/dev/null || echo '{}'
 }
 
@@ -730,8 +734,8 @@ frp_addresses_json() {
 # ------------------------------------------------------------------
 
 direct_deploy() {
-  if ! wan_ip_is_usable; then
-    log "This host sits behind CGNAT - the direct backend cannot work here."
+  if ! wan_direct_usable; then
+    log "This host sits behind CGNAT or double NAT - the direct backend cannot work here."
     log "Switch GAME_ROUTING to playit, bore or frp-vps (see $CONF_FILE)."
     return 0
   fi
@@ -739,7 +743,7 @@ direct_deploy() {
 }
 
 direct_addresses_json() {
-  wan_ip_is_usable || { echo '{}'; return 0; }
+  wan_direct_usable || { echo '{}'; return 0; }
   local port pub out="{" first=1
   pub=$(public_ip)
   for port in $(routing_ports); do

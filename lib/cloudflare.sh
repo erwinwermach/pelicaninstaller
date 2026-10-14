@@ -430,7 +430,7 @@ cf_ensure_dns() {
     done
   fi
 
-  if wan_ip_is_usable; then
+  if wan_direct_usable; then
     rm -f "$PI_ROOT/.cgnat-notice"
     local pub port
     pub=$(public_ip)

@@ -1069,6 +1069,20 @@ perf_props_set_port() {
   mv -f "$tmp" "$file"
 }
 
+perf_props_blank_bind() {
+  # Packs sometimes ship bind_address=<the pack author's IP>, which cannot be
+  # bound on this host (the mod logs a failure and falls back to wildcard).
+  # Blank it so the mod binds the container IP / wildcard cleanly.
+  local file=$1 tmp
+  [ -f "$file" ] || return 0
+  grep -qE '^[[:space:]]*bind_address[[:space:]]*=[[:space:]]*.+' "$file" || return 0
+  tmp=$(mktemp) || return 1
+  awk '/^[[:space:]]*bind_address[[:space:]]*=/ { print "bind_address="; next } { print }' "$file" > "$tmp" || { rm -f "$tmp"; return 1; }
+  chmod 644 "$tmp" 2>/dev/null || true
+  mv -f "$tmp" "$file"
+  return 0
+}
+
 perf_voice_loader_map() {
   # profile + raw haystack -> "modrinth-loader|mod|plugin"
   local profile=$1 hay=$2
@@ -1218,12 +1232,14 @@ perf_voicechat_setup() {
     perf_write_result "$uuid" '{"ok": false, "action": "voicechat_setup", "error": "could not write voicechat-server.properties"}'
     return 0
   fi
+  perf_props_blank_bind "$cfg" || true
   chown -R pelican:pelican "$(dirname "$cfg")" 2>/dev/null || true
   # Modpacks ship default configs that get copied over config/ on server start -
   # keep the port there too or the allocation stops matching after a restart.
   local pack_cfg="$dir/defaultconfigs/voicechat/voicechat-server.properties"
   if [ -f "$pack_cfg" ]; then
     perf_props_set_port "$pack_cfg" "$port" || true
+    perf_props_blank_bind "$pack_cfg" || true
     chown pelican:pelican "$pack_cfg" 2>/dev/null || true
   fi
 

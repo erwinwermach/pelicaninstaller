@@ -618,6 +618,43 @@ wan_ip_is_usable() {
   ! is_cgnat_ip "$pub"
 }
 
+router_wan_ip() {
+  # The router's own WAN address via UPnP (cached 1h; empty when unavailable).
+  # A private WAN here means double NAT even when the egress IP looks public.
+  local cache="$PI_ROOT/.router-wan" now last ip
+  now=$(date +%s)
+  if [ -f "$cache" ]; then
+    last=$(stat -c %Y "$cache" 2>/dev/null || echo 0)
+    if [ $(( now - last )) -lt 3600 ]; then
+      cat "$cache" 2>/dev/null
+      return 0
+    fi
+  fi
+  command -v upnpc >/dev/null 2>&1 || return 0
+  ip=$(timeout 10 upnpc -s 2>/dev/null | awk '/ExternalIPAddress/ {print $3}')
+  mkdir -p "$PI_ROOT" 2>/dev/null || true
+  printf '%s\n' "${ip:-}" > "$cache" 2>/dev/null || true
+  [ -n "$ip" ] && printf '%s\n' "$ip"
+  return 0
+}
+
+wan_direct_usable() {
+  # True only when inbound port-forwarding has a chance: the egress IP must be
+  # public AND the router's WAN (UPnP) must be public too and match it. A
+  # private/mismatching WAN is carrier-grade or double NAT - the panel must
+  # not advertise a direct public address then.
+  local pub wan
+  pub=$(public_ip)
+  [ -n "$pub" ] || return 1
+  is_cgnat_ip "$pub" && return 1
+  wan=$(router_wan_ip)
+  if [ -n "$wan" ]; then
+    is_cgnat_ip "$wan" && return 1
+    [ "$wan" = "$pub" ] || return 1
+  fi
+  return 0
+}
+
 public_ip() {
   # TTL-cached (10 min): heal cycles and routing share one lookup.
   local cache="$PI_ROOT/.public-ip" now last ip=""
