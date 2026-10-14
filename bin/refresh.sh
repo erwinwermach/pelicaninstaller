@@ -6,7 +6,7 @@ set -euo pipefail
 #   sudo /opt/pelican-installer/bin/refresh.sh plugins key    # selected parts
 #   sudo /opt/pelican-installer/bin/refresh.sh system         # full weekly update now
 #
-# Components: scripts services routing plugins key eggs panel|caches system
+# Components: scripts services routing plugins key eggs jars panel|caches system
 # `all` (the default) runs everything except `system` (the heavy apt/panel/wings
 # update, which is update.sh and takes a long time on purpose).
 
@@ -138,6 +138,13 @@ if want eggs; then
   # shellcheck source=../lib/eggs.sh
   . "$SCRIPT_DIR/lib/eggs.sh"
   run_step "egg imports ($EXTRA_EGGS)" eggs_phase
+fi
+
+# --- server jars (fix broken/missing launch jars) ---------------------------
+if want jars; then
+  # shellcheck source=../lib/jarfix.sh
+  . "$SCRIPT_DIR/lib/jarfix.sh"
+  run_step "server jar scan/repair" run_with_heartbeat "server jar scan/repair" 2400 server_jars_fix
 fi
 
 # --- panel caches + queue ---------------------------------------------------

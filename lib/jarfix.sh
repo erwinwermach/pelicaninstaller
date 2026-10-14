@@ -10,9 +10,24 @@ fabric_installer_ensure() {
   fi
 }
 
+resolve_mc_latest() {
+  # MC_VERSION=latest is common in upstream eggs; the Mojang/fabric tooling
+  # needs a concrete version or the in-place fixes fail on every heal.
+  curl -fsSL -m 30 "https://launchermeta.mojang.com/mc/game/version_manifest_v2.json" 2>/dev/null \
+    | python3 -c 'import sys, json; print(json.load(sys.stdin)["latest"]["release"])' 2>/dev/null || true
+}
+
+resolve_fabric_loader_latest() {
+  curl -fsSL -m 30 "https://meta.fabricmc.net/v2/versions/loader" 2>/dev/null \
+    | python3 -c 'import sys, json; d=json.load(sys.stdin); print(d[0]["version"] if d else "")' 2>/dev/null || true
+}
+
 game_jar_download() {
   local srvdir=$1 mc=$2
   command -v curl >/dev/null 2>&1 || return 1
+  case "$mc" in
+    latest|LATEST|"") mc=$(resolve_mc_latest) ;;
+  esac
   case "$mc" in
     *[!A-Za-z0-9._-]*|"") return 1 ;;
   esac
@@ -64,6 +79,13 @@ set_server_var() {
 
 fabric_install_inplace() {
   local srvdir=$1 mc=$2 ldr=$3 launch_jar=""
+  case "$mc" in
+    latest|LATEST|"") mc=$(resolve_mc_latest) ;;
+  esac
+  [ -n "$mc" ] || { log_err "Server $1: could not resolve the latest Minecraft version."; return 1; }
+  case "$ldr" in
+    latest|LATEST|"") ldr=$(resolve_fabric_loader_latest); [ -n "$ldr" ] || ldr=latest ;;
+  esac
   log "Server $1: installing Fabric $mc/$ldr directly into the volume..."
   fabric_installer_ensure || { log_err "Server $1: could not fetch fabric installer."; return 1; }
   if ! run_with_heartbeat "fabric installer (image pull may take a while)" 1200 \

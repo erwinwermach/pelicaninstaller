@@ -18,7 +18,7 @@ usage() {
   echo "      --no-self-update  Do not check for a newer installer version"
   echo "      --update        Update the installer scripts from GitHub and exit"
   echo "      --refresh [what]  Force-refresh a running install and exit:"
-  echo "                      scripts services routing plugins key eggs panel system | all"
+  echo "                      scripts services routing plugins key eggs jars panel system | all"
   echo "      --reset-admin   Reset the panel admin password (clears 2FA too)"
   echo "  -h, --help          Show this help"
   echo ""

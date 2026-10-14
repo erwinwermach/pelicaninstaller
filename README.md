@@ -220,8 +220,9 @@ sudo /opt/pelican-installer/bin/refresh.sh system          # run the full weekly
 Components: `scripts` (self-update + systemd units), `services`, `routing`
 (Cloudflare tunnel/DNS/certs, playit, addresses), `plugins` (import, update,
 re-enable, fallback patches), `key` (CurseForge sync + verify), `eggs`,
-`panel`/`caches` (optimize, queue recycle, php-fpm restart), `system`, `all`
-(the default). Log: `/var/log/pelican/refresh.log`.
+`jars` (scan/repair broken server launch jars), `panel`/`caches` (optimize,
+queue recycle, php-fpm restart), `system`, `all` (the default). Log:
+`/var/log/pelican/refresh.log`.
 
 The same is available through the installer entrypoint — also through the
 fetch one-liner, so no login needed beyond SSH:
