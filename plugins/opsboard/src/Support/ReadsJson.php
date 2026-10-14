@@ -17,11 +17,20 @@ trait ReadsJson
         return is_array($data) ? $data : [];
     }
 
-    public function getEventDetail(string $id): ?array
+    public function getEventDetail(string $id, ?string $tenantUuid = null): ?array
     {
         $event = $this->readJson(storage_path('app/crashlog/events/' . basename($id) . '.json'));
         if (empty($event)) {
             return null;
+        }
+
+        // Server-panel tenants may only open events of their own server; the
+        // admin dashboard passes no tenant and sees everything.
+        if ($tenantUuid !== null) {
+            $owner = (string) ($event['server'] ?? '');
+            if ($owner === '' || !str_starts_with($owner, substr($tenantUuid, 0, 8))) {
+                return null;
+            }
         }
 
         $event['excerpt'] = $this->decodeExcerpt($event);

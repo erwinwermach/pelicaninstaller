@@ -50,6 +50,7 @@ wipe_phase() {
     /usr/local/bin/bore /usr/local/bin/frpc /opt/frp /etc/frps.toml \
     /etc/systemd/system/frpc.service /etc/systemd/system/frps.service \
     /etc/systemd/system/bore@.service /etc/docker/daemon.json \
+    /etc/systemd/system/playit.service /etc/playit /usr/local/bin/playitd \
     /etc/apt/sources.list.d/ondrej-* || {
     log_err "Some installer directories could not be removed."
     failures=$((failures + 1))

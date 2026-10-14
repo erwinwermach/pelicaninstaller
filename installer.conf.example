@@ -118,7 +118,7 @@ INSTALL_SELF_PLUGINS=yes
 #              Forge, NeoForge, Quilt, Velocity, BungeeCord, Pumpkin)
 #   all      = everything above
 #   none     = skip egg imports
-EXTRA_EGGS=games,bots
+EXTRA_EGGS=games,bots,minecraft
 
 # Server-side optimizer mods (Performance plugin): matches ModernFix, FerriteCore,
 # Lithium/Canary, Krypton, C2ME, ... to each modded server's exact loader and

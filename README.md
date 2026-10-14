@@ -33,10 +33,12 @@ RAM) and wired up for hosting behind **CGNAT/NAT**:
 ## Included eggs (imported automatically)
 
 The installer imports a curated set of eggs from the community pelican-eggs
-repos (`EXTRA_EGGS=games,bots` by default, configurable):
+repos (`EXTRA_EGGS=games,bots,minecraft` by default, configurable):
 
 - **Games (SteamCMD/standalone):** Rust, Valheim, 7 Days to Die, CS2,
   CS:Source, TF2, GMod, Palworld, Satisfactory, Terraria, Factorio, FiveM
+- **Minecraft:** Paper, Purpur, Folia, Vanilla, Fabric, Forge, NeoForge,
+  Quilt, Velocity, BungeeCord + Pumpkin (Rust, vendored egg)
 - **Bots:** Discord bots (Red, Ree6)
 - **Runtimes:** generic Python, NodeJS, Rust — for your own scripts and bots
 

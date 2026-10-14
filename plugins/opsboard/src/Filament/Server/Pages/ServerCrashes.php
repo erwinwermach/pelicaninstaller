@@ -99,13 +99,13 @@ class ServerCrashes extends Page
     public function download(string $id): StreamedResponse
     {
         return response()->streamDownload(function () use ($id) {
-            echo $this->formatEvent($this->getEventDetail($id));
+            echo $this->formatEvent($this->getEventDetail($id, Filament::getTenant()?->uuid));
         }, 'crash-' . basename($id) . '.txt', ['Content-Type' => 'text/plain']);
     }
 
     public function upload(string $id): void
     {
-        $event = $this->getEventDetail($id);
+        $event = $this->getEventDetail($id, Filament::getTenant()?->uuid);
         if (empty($event)) {
             Notification::make()->title('Event not found')->danger()->send();
 

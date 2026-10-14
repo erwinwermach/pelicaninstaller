@@ -177,9 +177,99 @@ playit_agent_id() {
   [ -n "$PLAYIT_AGENT_ID" ]
 }
 
+playit_arch() {
+  case "$(uname -m)" in
+    x86_64) echo amd64 ;;
+    aarch64) echo aarch64 ;;
+    armv7l|armv7) echo armv7 ;;
+    i686|i386) echo i686 ;;
+    *) return 1 ;;
+  esac
+}
+
 playit_container_running() {
+  # True when either the native systemd agent or the legacy docker agent is up.
+  if systemctl is-active --quiet playit 2>/dev/null; then
+    return 0
+  fi
   command -v docker >/dev/null 2>&1 || return 1
   docker ps --format '{{.Names}}' 2>/dev/null | grep -qx playit-agent
+}
+
+playit_native_install() {
+  # Native agent instead of the docker container: boots immediately with
+  # systemd (no docker dependency) and does not slow down restarts/reboots.
+  local arch
+  arch=$(playit_arch) || { log_err "playit: unsupported architecture."; return 1; }
+  mkdir -p /etc/playit
+  run_with_heartbeat "playit agent download" 600 \
+    curl -fsSL -m 300 -o /usr/local/bin/playitd \
+    "https://github.com/playit-cloud/playit-agent/releases/latest/download/playit-linux-$arch" \
+    || return 1
+  chmod +x /usr/local/bin/playitd
+  id playit >/dev/null 2>&1 || useradd --system --home-dir /etc/playit --shell /usr/sbin/nologin playit || {
+    log_err "Could not create the playit system user."
+    return 1
+  }
+  # playitd reads the agent secret from /etc/playit/playit.toml (secret_key).
+  if ! ( umask 077; printf 'secret_key = "%s"\n' "$PLAYIT_SECRET_KEY" > /etc/playit/playit.toml ); then
+    log_err "Could not write the playit secret file."
+    return 1
+  fi
+  chmod 600 /etc/playit/playit.toml 2>/dev/null || true
+  chown -R playit:playit /etc/playit 2>/dev/null || true
+  cat > /etc/systemd/system/playit.service <<'EOF'
+[Unit]
+Description=playit.gg agent
+Documentation=https://playit.gg
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=playit
+Group=playit
+RuntimeDirectory=playit
+RuntimeDirectoryMode=0750
+LogsDirectory=playit
+LogsDirectoryMode=0750
+UMask=0007
+ExecStart=/usr/local/bin/playitd --secret-path /etc/playit/playit.toml --socket-path /run/playit/playitd.sock -l /var/log/playit/playit.log
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=15
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  systemctl daemon-reload
+  # Retire the legacy docker agent so two agents never fight over one key.
+  if command -v docker >/dev/null 2>&1 && docker ps -a --format '{{.Names}}' 2>/dev/null | grep -qx playit-agent; then
+    docker rm -f playit-agent >/dev/null 2>&1 || true
+    log "Removed the legacy playit docker container (native service handles the tunnels now)."
+  fi
+  return 0
+}
+
+playit_docker_ensure() {
+  # Fallback for hosts where the native binary could not be installed.
+  if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -qx playit-agent; then
+    docker start playit-agent >/dev/null 2>&1 && log "playit agent restarted."
+    return 0
+  fi
+  docker rm -f playit-agent >/dev/null 2>&1 || true
+  local envfile
+  envfile=$(mktemp) || return 1
+  chmod 600 "$envfile" 2>/dev/null || true
+  printf 'SECRET_KEY=%s\n' "$PLAYIT_SECRET_KEY" > "$envfile" 2>/dev/null
+  if run_with_heartbeat "playit agent image pull + start" 900 \
+       docker run -d --restart unless-stopped --name playit-agent --net=host \
+       --env-file "$envfile" \
+       ghcr.io/playit-cloud/playit-agent:1.0; then
+    log "playit agent (re)started."
+  else
+    log_err "playit agent failed to start - check 'docker logs playit-agent'."
+  fi
+  rm -f "$envfile"
 }
 
 playit_agent_ensure() {
@@ -187,29 +277,20 @@ playit_agent_ensure() {
     PLAYIT_SECRET_KEY=$(panel_env_get PLAYIT_SECRET_KEY)
   fi
   [ -n "${PLAYIT_SECRET_KEY:-}" ] || return 0
-  command -v docker >/dev/null 2>&1 || return 0
   if playit_container_running; then
     return 0
   fi
-  if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -qx playit-agent; then
-    docker start playit-agent >/dev/null 2>&1 && log "playit agent restarted."
-  else
-    docker rm -f playit-agent >/dev/null 2>&1 || true
-    local envfile
-    envfile=$(mktemp) || return 1
-    chmod 600 "$envfile" 2>/dev/null || true
-    printf 'SECRET_KEY=%s\n' "$PLAYIT_SECRET_KEY" > "$envfile" 2>/dev/null
-    if run_with_heartbeat "playit agent image pull + start" 900 \
-         docker run -d --restart unless-stopped --name playit-agent --net=host \
-         --env-file "$envfile" \
-         ghcr.io/playit-cloud/playit-agent:1.0; then
-      log "playit agent (re)started."
+  if ! playit_native_install; then
+    if command -v docker >/dev/null 2>&1; then
+      log_err "Native playit agent install failed - falling back to the docker container."
+      playit_docker_ensure || return 1
     else
-      log_err "playit agent failed to start - check 'docker logs playit-agent'."
+      return 1
     fi
-    rm -f "$envfile"
+  else
+    ensure_service playit 4 || { log_err "playit agent failed to start - check 'journalctl -u playit'."; return 1; }
+    log "playit agent (native service) running."
   fi
-  sleep 3
   return 0
 }
 

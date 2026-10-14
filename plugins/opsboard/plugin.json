@@ -2,9 +2,11 @@
     "id": "opsboard",
     "name": "Ops Board",
     "author": "pelicaninstaller",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "description": "All-in-one operations board: system health with one-click jar repair, crashlog timeline with mclo.gs upload, player connection addresses (playit/bore/frp/direct) and Cloudflare routing overview.",
     "category": "plugin",
+    "url": "https://github.com/erwinwermach/pelicaninstaller",
+    "update_url": "https://github.com/erwinwermach/pelicaninstaller/releases/latest/download/plugins-feed.json",
     "namespace": "Pelicaninstaller\\OpsBoard",
     "class": "OpsBoardPlugin",
     "panels": [
@@ -12,5 +14,6 @@
         "server"
     ],
     "panel_version": null,
+    "api_version": 1,
     "composer_packages": {}
 }

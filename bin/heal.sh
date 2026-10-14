@@ -158,6 +158,7 @@ foreach (\App\Models\Role::getPermissionList() as \$model => \$prefixes) {
     . "$HEAL_DIR/lib/plugins.sh"
     plugins_ensure_installed >>"$INSTALL_LOG" 2>&1 || true
     plugins_reconcile >>"$INSTALL_LOG" 2>&1 || true
+    plugins_update_all >>"$INSTALL_LOG" 2>&1 || true
     plugins_patch_modpack >>"$INSTALL_LOG" 2>&1 || true
     # shellcheck source=../lib/eggs.sh
     . "$HEAL_DIR/lib/eggs.sh"

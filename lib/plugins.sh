@@ -4,8 +4,10 @@ INSTALL_SELF_PLUGINS=${INSTALL_SELF_PLUGINS:-yes}
 SELF_PLUGIN_RELEASE_BASE="${SELF_PLUGIN_RELEASE_BASE:-https://github.com/erwinwermach/pelicaninstaller/releases/latest/download}"
 
 plugin_catalog() {
+  # Pinned hub release ids are only a fallback: at import time the installer
+  # resolves the hub's newest release per plugin (plugin_hub_latest_url).
   cat <<'EOF'
-modpack-manager|https://hub.pelican.dev/plugins/modpack-manager/download/187/modpack-manager.zip
+modpack-manager|https://hub.pelican.dev/plugins/modpack-manager/download/248/modpack-manager.zip
 minecraft-modrinth|https://hub.pelican.dev/plugins/minecraft-modrinth/download/167/minecraft-modrinth.zip
 player-counter|https://hub.pelican.dev/plugins/player-counter/download/168/player-counter.zip
 system-status-monitor|https://hub.pelican.dev/plugins/system-status-monitor/download/102/system-status-monitor.zip
@@ -13,25 +15,128 @@ mclogs-uploader|https://hub.pelican.dev/plugins/mclogs-uploader/download/149/mcl
 EOF
 }
 
+plugin_hub_latest_url() {
+  # $1 = pinned hub url (hub.pelican.dev/plugins/<slug>/download/<id>/<file>.zip)
+  # Returns "<resolved-url>|<verified-version>" - the pinned url with an empty
+  # version when the hub cannot be resolved. The hub has no "latest" alias, so
+  # the plugin page is scraped for version -> release-id pairs, and the zip is
+  # downloaded and its plugin.json version read before the url is trusted
+  # (imports of a stale version are exactly what this avoids). Cached 6h.
+  local pinned=$1
+  local slug file cache="$PI_ROOT/hub-plugin-versions.cache"
+  local now ts id version hit tmp ztmp got rc=1
+  slug=$(printf '%s' "$pinned" | sed -n 's|.*/plugins/\([^/]*\)/download/.*|\1|p')
+  file=$(printf '%s' "$pinned" | sed -n 's|.*/download/[0-9]*/||p')
+  if [ -z "$slug" ] || [ -z "$file" ]; then
+    echo "$pinned|"
+    return 0
+  fi
+
+  now=$(date +%s)
+  if [ -f "$cache" ]; then
+    hit=$(grep -E "^${slug}\|" "$cache" 2>/dev/null | tail -1 || true)
+    if [ -n "$hit" ]; then
+      id=$(printf '%s' "$hit" | cut -d'|' -f2)
+      version=$(printf '%s' "$hit" | cut -d'|' -f3)
+      ts=$(printf '%s' "$hit" | cut -d'|' -f4)
+      if [ -n "$id" ] && [ -n "$version" ] && [ -n "$ts" ] && [ $(( now - ts )) -lt 21600 ]; then
+        echo "https://hub.pelican.dev/plugins/$slug/download/$id/$file|$version"
+        return 0
+      fi
+    fi
+  fi
+
+  tmp=$(mktemp) || { echo "$pinned|"; return 0; }
+  if curl -fsSL -m 30 -o "$tmp" "https://hub.pelican.dev/plugins/$slug" 2>/dev/null; then
+    # Hub release ids are monotonic: the highest id on the page is the newest
+    # release. The zip's own plugin.json decides the recorded version.
+    id=$(python3 - "$tmp" <<'PY' 2>/dev/null || true
+import re, sys
+h = open(sys.argv[1], encoding="utf-8", errors="replace").read()
+ids = [int(x) for x in re.findall(r"download/(\d+)/[\w.-]+\.zip", h)]
+print(max(ids) if ids else "")
+PY
+)
+    id=$(printf '%s' "$id" | tail -1)
+    if [ -n "$id" ]; then
+      ztmp=$(mktemp /tmp/hub-plugin.XXXXXX.zip) || { rm -f "$tmp"; echo "$pinned|"; return 0; }
+      if curl -fsSL -m 120 -o "$ztmp" "https://hub.pelican.dev/plugins/$slug/download/$id/$file" 2>/dev/null; then
+        got=$(python3 - "$ztmp" "$slug" <<'PY' 2>/dev/null || true
+import json, sys, zipfile
+z = zipfile.ZipFile(sys.argv[1])
+data = json.loads(z.read(sys.argv[2] + "/plugin.json"))
+print(data.get("version", ""))
+PY
+)
+        got=$(printf '%s' "$got" | tail -1)
+        if [ -n "$got" ]; then
+          version="$got"
+          mkdir -p "$PI_ROOT" 2>/dev/null || true
+          {
+            grep -vE "^${slug}\|" "$cache" 2>/dev/null || true
+            printf '%s|%s|%s|%s\n' "$slug" "$id" "$version" "$(date +%s)"
+          } > "$cache.tmp" && mv -f "$cache.tmp" "$cache"
+          chmod 600 "$cache" 2>/dev/null || true
+          rc=0
+        fi
+      fi
+      rm -f "$ztmp"
+    fi
+  fi
+  rm -f "$tmp"
+  if [ "$rc" = "0" ] && [ -n "$id" ]; then
+    echo "https://hub.pelican.dev/plugins/$slug/download/$id/$file|$version"
+  else
+    echo "$pinned|"
+  fi
+}
+
+plugins_select_resolve() {
+  # Returns "name|url" with the hub url replaced by its newest release when the
+  # resolution verified. Falls back to the pinned url otherwise.
+  local name=$1 url=$2 resolved r_url r_ver
+  case "$url" in
+    *hub.pelican.dev/plugins/*)
+      resolved=$(plugin_hub_latest_url "$url")
+      r_url=${resolved%%|*}
+      r_ver=${resolved#*|}
+      if [ -n "$r_ver" ] && [ "$r_url" != "$url" ]; then
+        echo "$name|$r_url"
+        return 0
+      fi
+      ;;
+  esac
+  echo "$name|$url"
+}
+
 plugins_selected() {
+  local sel=""
   case "$PANEL_PLUGINS" in
-    all) plugin_catalog | awk -F'|' '{print $1"|"$2}' ;;
-    none) echo "" ;;
+    all) sel=$(plugin_catalog | awk -F'|' '{print $1"|"$2}') ;;
+    none) sel="" ;;
     minimal)
-      plugin_catalog | grep -E '^(modpack-manager|minecraft-modrinth|mclogs-uploader)\|' || true
+      sel=$(plugin_catalog | grep -E '^(modpack-manager|minecraft-modrinth|mclogs-uploader)\|' || true)
       ;;
     *)
-      local line name_u url_u
+      local line name_u url_u want
       while IFS='|' read -r name_u url_u; do
-        local want
+        [ -n "$name_u" ] || continue
         for want in $(echo "$PANEL_PLUGINS" | tr ',' ' '); do
-          [ "$name_u" = "$want" ] && echo "$name_u|$url_u"
+          if [ "$name_u" = "$want" ]; then
+            sel="${sel}${name_u}|${url_u}"$'\n'
+          fi
         done
       done <<EOF
 $(plugin_catalog)
 EOF
       ;;
   esac
+  # Resolve hub plugins to their newest release before anything is imported;
+  # the pinned ids in the catalog are only a fallback for offline resolution.
+  printf '%s' "$sel" | while IFS='|' read -r name url; do
+    [ -n "$name" ] || continue
+    plugins_select_resolve "$name" "$url"
+  done
   if [ "$INSTALL_SELF_PLUGINS" = "yes" ]; then
     echo "opsboard|$SELF_PLUGIN_RELEASE_BASE/opsboard.zip"
     echo "perfctl|$SELF_PLUGIN_RELEASE_BASE/perfctl.zip"
@@ -109,6 +214,33 @@ plugins_reconcile() {
   done <<EOF
 $(plugins_selected)
 EOF
+}
+
+plugins_update_all() {
+  # Panel-side plugin updates via `p:plugin:update` (checks each installed
+  # plugin's update_url - hub plugins ship one, ours reads plugins-feed.json
+  # published with the plugin zips). "Nothing to update" exits 0 and is fine.
+  [ -f "$PANEL_DIR/artisan" ] || return 0
+  ensure_app_api_key || return 0
+  local php_bin name url
+  php_bin="php$(panel_php_version)"
+  while IFS='|' read -r name url; do
+    [ -n "$name" ] || continue
+    app_api GET "/plugins/$name"
+    if [ "$APP_CODE" != "200" ]; then
+      continue
+    fi
+    if run_heartbeat_sh "plugin update check ($name)" 1800 \
+         'cd "$1" && COMPOSER_ALLOW_SUPERUSER=1 "$2" artisan p:plugin:update "$3"' \
+         "$PANEL_DIR" "$php_bin" "$name"; then
+      log "Plugin '$name' updated or already current."
+    else
+      log_err "Plugin '$name' update failed - check the panel logs."
+    fi
+  done <<EOF
+$(plugins_selected)
+EOF
+  return 0
 }
 
 plugins_phase() {

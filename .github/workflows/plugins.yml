@@ -24,7 +24,7 @@ jobs:
       - name: Publish rolling plugin release
         run: |
           gh release view plugins-latest >/dev/null 2>&1 || \
-            gh release create plugins-latest --title "Panel plugin zips (rolling)" --notes "Auto-built from main. The installer imports these via releases/latest/download/<plugin>.zip."
-          gh release upload plugins-latest dist/*.zip --clobber
+            gh release create plugins-latest --title "Panel plugin zips (rolling)" --notes "Auto-built from main. The installer imports these via releases/latest/download/<plugin>.zip. plugins-feed.json powers the panel's plugin updater (plugin.json update_url)."
+          gh release upload plugins-latest dist/*.zip dist/plugins-feed.json --clobber
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

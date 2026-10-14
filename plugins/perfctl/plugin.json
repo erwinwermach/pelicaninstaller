@@ -2,9 +2,11 @@
     "id": "perfctl",
     "name": "Performance",
     "author": "pelicaninstaller",
-    "version": "1.2.0",
+    "version": "1.2.1",
     "description": "Node-aware performance advisor: detects each server's workload (PaperMC, Forge/NeoForge/Fabric, Pumpkin, Source engine, Python, Node.js, proxies) and recommends tuned startup flags, correct memory sizing (fixes unbounded JVM heaps), server.properties / pumpkin.toml / user_jvm_args optimizations, JVM boot accelerators (CDS, Java 25 AOT cache), a platform advisor and a server-side optimizer-mod bundle (ModernFix, FerriteCore, ...) matched to the exact loader and Minecraft version. Nothing is changed automatically - you review and apply.",
     "category": "plugin",
+    "url": "https://github.com/erwinwermach/pelicaninstaller",
+    "update_url": "https://github.com/erwinwermach/pelicaninstaller/releases/latest/download/plugins-feed.json",
     "namespace": "Pelicaninstaller\\Perfctl",
     "class": "PerfctlPlugin",
     "panels": [
@@ -12,5 +14,6 @@
         "admin"
     ],
     "panel_version": null,
+    "api_version": 1,
     "composer_packages": {}
 }
