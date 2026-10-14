@@ -205,6 +205,32 @@ sysctl/BBR, zram for low-memory hosts, NVMe/IO scheduler rules.
 Manual: `sudo bash /opt/pelican-installer/installer.sh` (resumes unfinished
 phases), `sudo /opt/pelican-installer/bin/heal.sh`, `.../bin/update.sh`.
 
+### Force a refresh over SSH
+
+The watchdog does all of this on its timers; these commands do it **now**, and
+only what you ask for:
+
+```bash
+sudo /opt/pelican-installer/bin/refresh.sh                 # everything except the heavy apt update
+sudo /opt/pelican-installer/bin/refresh.sh plugins key     # e.g. after pasting a new CurseForge key
+sudo /opt/pelican-installer/bin/refresh.sh eggs routing
+sudo /opt/pelican-installer/bin/refresh.sh system          # run the full weekly update now (apt + panel + wings)
+```
+
+Components: `scripts` (self-update + systemd units), `services`, `routing`
+(Cloudflare tunnel/DNS/certs, playit, addresses), `plugins` (import, update,
+re-enable, fallback patches), `key` (CurseForge sync + verify), `eggs`,
+`panel`/`caches` (optimize, queue recycle, php-fpm restart), `system`, `all`
+(the default). Log: `/var/log/pelican/refresh.log`.
+
+The same is available through the installer entrypoint — also through the
+fetch one-liner, so no login needed beyond SSH:
+
+```bash
+sudo bash /opt/pelican-installer/installer.sh --refresh plugins
+curl -fsSL https://raw.githubusercontent.com/erwinwermach/pelicaninstaller/main/install.sh | sudo bash -s -- --refresh plugins
+```
+
 ## Network reality
 
 Most home connections sit behind CGNAT — direct port forwarding is useless and

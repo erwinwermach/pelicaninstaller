@@ -8,6 +8,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKIP_WIPE=0
 AUTO_REBOOT_FLAG=""
 FORCE_SELF_UPDATE=0
+FORCE_REFRESH=0
 
 usage() {
   echo "Usage: $0 [options]"
@@ -16,6 +17,8 @@ usage() {
   echo "      --skip-wipe     Skip the clean-slate wipe phase (resume after failure)"
   echo "      --no-self-update  Do not check for a newer installer version"
   echo "      --update        Update the installer scripts from GitHub and exit"
+  echo "      --refresh [what]  Force-refresh a running install and exit:"
+  echo "                      scripts services routing plugins key eggs panel system | all"
   echo "      --reset-admin   Reset the panel admin password (clears 2FA too)"
   echo "  -h, --help          Show this help"
   echo ""
@@ -179,7 +182,7 @@ install_heal_system() {
   cp -f "$SCRIPT_DIR/installer.sh" "$inst_dir/"
   cp -f "$SCRIPT_DIR/install.sh" "$inst_dir/"
   cp -f "$SCRIPT_DIR/VERSION" "$inst_dir/" 2>/dev/null || true
-  chmod +x "$inst_dir/bin/heal.sh" "$inst_dir/bin/update.sh"
+  chmod +x "$inst_dir/bin/heal.sh" "$inst_dir/bin/update.sh" "$inst_dir/bin/refresh.sh"
 
   deploy_heal_units "$inst_dir/systemd"
 
@@ -282,6 +285,7 @@ while [ $# -gt 0 ]; do
     --skip-wipe) SKIP_WIPE=1; shift ;;
     --no-self-update) NO_SELF_UPDATE=1; shift ;;
     --update) FORCE_SELF_UPDATE=1; shift ;;
+    --refresh) FORCE_REFRESH=1; shift; break ;;
     --reset-admin) RESET_ADMIN=1; shift ;;
     -h|--help) usage ;;
     *) echo "Unknown option: $1"; usage ;;
@@ -319,6 +323,12 @@ if [ "${NO_SELF_UPDATE:-0}" != "1" ]; then
   if [ "${PI_UPDATE_PERFORMED:-0}" = "1" ]; then
     exec bash "$SCRIPT_DIR/installer.sh" --no-self-update "$@"
   fi
+fi
+
+# --refresh dispatches to bin/refresh.sh with the component names in "$@"
+# (scripts services routing plugins key eggs panel system | all).
+if [ "${FORCE_REFRESH:-0}" = "1" ]; then
+  exec bash "$SCRIPT_DIR/bin/refresh.sh" "$@"
 fi
 
 # ------------------------------------------------------------------
